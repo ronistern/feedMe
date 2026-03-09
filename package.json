@@ -1,0 +1,9 @@
+{
+  "name": "feedme-today",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Funny family meal board for kids and parents",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

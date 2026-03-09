@@ -13,74 +13,94 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
+    <div class="onboarding-overlay" id="onboarding-overlay">
+      <section class="onboarding-card" aria-labelledby="onboarding-title">
+        <p class="eyebrow">Who is visiting?</p>
+        <h2 id="onboarding-title">Choose your role and name</h2>
+
+        <div class="onboarding-section">
+          <p class="input-label">I am a...</p>
+          <div class="onboarding-role-grid" role="radiogroup" aria-label="Choose your role">
+            <label class="name-option">
+              <input type="radio" name="profileRole" value="kids" />
+              <span>Kid</span>
+            </label>
+            <label class="name-option">
+              <input type="radio" name="profileRole" value="parent" />
+              <span>Parent</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="onboarding-section">
+          <p class="input-label">My name is...</p>
+          <div class="name-grid" id="profile-name-grid" role="radiogroup" aria-label="Choose your name"></div>
+        </div>
+
+        <div class="onboarding-section is-hidden" id="parent-code-section">
+          <label class="input-label" for="parent-code-input">Parent code</label>
+          <input
+            id="parent-code-input"
+            name="parentCode"
+            type="password"
+            placeholder="Enter the parent code"
+            autocomplete="off"
+          />
+        </div>
+
+        <button class="primary-button wide-button" id="profile-submit" type="button">
+          Enter FeedMe Today
+        </button>
+        <p class="status-message" id="profile-status" role="status" aria-live="polite"></p>
+      </section>
+    </div>
+
     <main class="app-shell">
       <section class="hero">
-        <p class="eyebrow">Family food board</p>
-        <h1>FeedMe Today</h1>
-        <p class="hero-copy">
-          Kids can ask for the food they want, and parents can share what is on
-          the menu for lunch and dinner.
-        </p>
+        <div class="hero-top">
+          <div class="hero-copy-block">
+            <p class="eyebrow">Family food board</p>
+            <h1>FeedMe Today</h1>
+            <p class="hero-copy">
+              Kids can ask for the food they want, and parents can share what is on
+              the menu for lunch and dinner.
+            </p>
+          </div>
+
+          <div class="hero-controls">
+            <nav class="role-switcher" aria-label="Choose a view" role="tablist">
+              <button
+                class="role-tab is-active"
+                id="kids-tab"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="kids-main-panel"
+                data-view-target="kids"
+              >
+                Kids
+              </button>
+              <button
+                class="role-tab"
+                id="parent-tab"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="parent-main-panel"
+                data-view-target="parent"
+              >
+                Parent
+              </button>
+            </nav>
+            <div class="header-name-picker" id="header-name-picker" aria-label="Choose your name"></div>
+          </div>
+        </div>
       </section>
 
-      <nav class="role-switcher" aria-label="Choose a view" role="tablist">
-        <button
-          class="role-tab is-active"
-          id="kids-tab"
-          type="button"
-          role="tab"
-          aria-selected="true"
-          aria-controls="kids-panel"
-          data-view-target="kids"
-        >
-          Kids
-        </button>
-        <button
-          class="role-tab"
-          id="parent-tab"
-          type="button"
-          role="tab"
-          aria-selected="false"
-          aria-controls="parent-panel"
-          data-view-target="parent"
-        >
-          Parent
-        </button>
-      </nav>
-
       <section class="dashboard">
-        <article class="card menu-card" aria-labelledby="menu-title">
-          <div class="card-header">
-            <p class="card-kicker">Today</p>
-            <h2 id="menu-title">Lunch and dinner</h2>
-          </div>
-
-          <div class="meal-grid">
-            <section class="meal-panel lunch-panel" aria-labelledby="lunch-title">
-              <p class="meal-label">Lunch</p>
-              <h3 id="lunch-title" class="meal-name" data-meal-display="lunch">
-                No lunch planned yet
-              </h3>
-              <p class="meal-note" data-note-display="lunch">
-                Add the lunch plan in the parent view.
-              </p>
-            </section>
-
-            <section class="meal-panel dinner-panel" aria-labelledby="dinner-title">
-              <p class="meal-label">Dinner</p>
-              <h3 id="dinner-title" class="meal-name" data-meal-display="dinner">
-                No dinner planned yet
-              </h3>
-              <p class="meal-note" data-note-display="dinner">
-                Add the dinner plan in the parent view.
-              </p>
-            </section>
-          </div>
-        </article>
-
         <article
           class="card interactive-card view-panel is-active"
-          id="kids-panel"
+          id="kids-main-panel"
           data-view-panel="kids"
           role="tabpanel"
           aria-labelledby="kids-tab"
@@ -95,38 +115,6 @@
             show up for the parent.
           </p>
 
-          <fieldset class="name-picker">
-            <legend class="input-label">Who is asking?</legend>
-            <div class="name-grid" role="radiogroup" aria-label="Choose your name">
-              <label class="name-option">
-                <input type="radio" name="childName" value="Ofer" />
-                <span>Ofer</span>
-              </label>
-              <label class="name-option">
-                <input type="radio" name="childName" value="Amir" />
-                <span>Amir</span>
-              </label>
-              <label class="name-option">
-                <input type="radio" name="childName" value="Nitzan" />
-                <span>Nitzan</span>
-              </label>
-              <label class="name-option">
-                <input type="radio" name="childName" value="Adi" />
-                <span>Adi</span>
-              </label>
-              <label class="name-option">
-                <input type="radio" name="childName" value="Roni" />
-                <span>Roni</span>
-              </label>
-            </div>
-          </fieldset>
-
-          <section class="reply-card" aria-labelledby="reply-title">
-            <p class="card-kicker">Chef Bot</p>
-            <h3 id="reply-title" class="reply-title is-hidden">Chef Bot says</h3>
-            <p class="reply-copy" id="reply-output"></p>
-          </section>
-
           <div class="suggestion-grid" aria-label="Suggested food requests">
             <button class="suggestion-chip" type="button" data-suggestion="Pasta">
               Pasta
@@ -137,8 +125,8 @@
             <button class="suggestion-chip" type="button" data-suggestion="Soup">
               Soup
             </button>
-            <button class="suggestion-chip" type="button" data-suggestion="Rice bowl">
-              Rice bowl
+            <button class="suggestion-chip" type="button" data-suggestion="Rice">
+              Rice
             </button>
             <button class="suggestion-chip" type="button" data-suggestion="Sandwich">
               Sandwich
@@ -168,8 +156,34 @@
         </article>
 
         <article
+          class="card interactive-card view-panel is-active response-pane"
+          id="kids-response-panel"
+          data-view-panel="kids"
+          role="tabpanel"
+          aria-labelledby="kids-tab"
+        >
+          <div class="card-header">
+            <p class="card-kicker">Chef Bot</p>
+            <h2>Kitchen response</h2>
+          </div>
+
+          <section class="reply-card standalone-reply-card" aria-labelledby="reply-title">
+            <div class="thinking-indicator is-hidden" id="thinking-indicator" aria-live="polite">
+              <div class="thinking-bubbles" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <p class="thinking-copy">Chef Bot is thinking...</p>
+            </div>
+            <h3 id="reply-title" class="reply-title is-hidden">Chef Bot says</h3>
+            <p class="reply-copy" id="reply-output"></p>
+          </section>
+        </article>
+
+        <article
           class="card interactive-card view-panel"
-          id="parent-panel"
+          id="parent-main-panel"
           data-view-panel="parent"
           role="tabpanel"
           aria-labelledby="parent-tab"
@@ -220,6 +234,19 @@
               Save today&apos;s menu
             </button>
           </form>
+        </article>
+
+        <article
+          class="card interactive-card view-panel response-pane"
+          id="parent-response-panel"
+          data-view-panel="parent"
+          role="tabpanel"
+          aria-labelledby="parent-tab"
+        >
+          <div class="card-header">
+            <p class="card-kicker">Chef responses</p>
+            <h2>Kids&apos; requests</h2>
+          </div>
 
           <section class="requests-board" aria-labelledby="requests-title">
             <div class="requests-header">
@@ -233,6 +260,35 @@
               No requests yet. Kids can send one from their view.
             </p>
           </section>
+        </article>
+
+        <article class="card menu-card" aria-labelledby="menu-title">
+          <div class="card-header">
+            <p class="card-kicker">Today</p>
+            <h2 id="menu-title">Lunch and dinner</h2>
+          </div>
+
+          <div class="meal-grid">
+            <section class="meal-panel lunch-panel" aria-labelledby="lunch-title">
+              <p class="meal-label">Lunch</p>
+              <h3 id="lunch-title" class="meal-name" data-meal-display="lunch">
+                No lunch planned yet
+              </h3>
+              <p class="meal-note" data-note-display="lunch">
+                Add the lunch plan in the parent view.
+              </p>
+            </section>
+
+            <section class="meal-panel dinner-panel" aria-labelledby="dinner-title">
+              <p class="meal-label">Dinner</p>
+              <h3 id="dinner-title" class="meal-name" data-meal-display="dinner">
+                No dinner planned yet
+              </h3>
+              <p class="meal-note" data-note-display="dinner">
+                Add the dinner plan in the parent view.
+              </p>
+            </section>
+          </div>
         </article>
       </section>
     </main>

@@ -20,9 +20,17 @@ const emptyRequests = document.getElementById("empty-requests");
 const requestStatus = document.getElementById("request-status");
 const clearRequestsButton = document.getElementById("clear-requests");
 const suggestionButtons = document.querySelectorAll("[data-suggestion]");
-const childNameInputs = document.querySelectorAll('input[name="childName"]');
 const replyOutput = document.getElementById("reply-output");
 const replyTitle = document.getElementById("reply-title");
+const thinkingIndicator = document.getElementById("thinking-indicator");
+const onboardingOverlay = document.getElementById("onboarding-overlay");
+const profileStatus = document.getElementById("profile-status");
+const profileSubmitButton = document.getElementById("profile-submit");
+const profileNameGrid = document.getElementById("profile-name-grid");
+const profileRoleInputs = document.querySelectorAll('input[name="profileRole"]');
+const headerNamePicker = document.getElementById("header-name-picker");
+const parentCodeSection = document.getElementById("parent-code-section");
+const parentCodeInput = document.getElementById("parent-code-input");
 const clientFallbackReplies = [
   "That order just made the frying pan raise an eyebrow.",
   "Interesting choice. The kitchen staff is now in dramatic negotiations.",
@@ -30,8 +38,90 @@ const clientFallbackReplies = [
   "Bold move. The fridge is pretending it did not hear that.",
   "Strong choice. Someone tell the plates to brace themselves.",
 ];
+const preferredVoiceNames = [
+  "Samantha",
+  "Karen",
+  "Moira",
+  "Google US English",
+  "Google UK English Female",
+  "Microsoft Aria Online (Natural)",
+  "Microsoft Jenny Online (Natural)",
+];
+const SESSION_KEY = "feedme-profile";
+const PARENT_CODE = "!!!";
+const GANDALF_AUDIO_PATH = "/assets/you-shall-not-pass.mp3";
+const PROFILES = {
+  kids: ["Ofer", "Amit", "Nitzan"],
+  parent: ["Adi", "Roni"],
+};
 
 let state = loadState();
+let availableVoices = [];
+let activeProfile = loadProfile();
+let replyRevealTimeoutId = null;
+let speechPrimed = false;
+
+function loadVoices() {
+  if (!("speechSynthesis" in window)) {
+    return;
+  }
+
+  availableVoices = window.speechSynthesis.getVoices();
+}
+
+function getPreferredVoice() {
+  if (!availableVoices.length) {
+    return null;
+  }
+
+  for (const voiceName of preferredVoiceNames) {
+    const match = availableVoices.find((voice) => voice.name === voiceName);
+    if (match) {
+      return match;
+    }
+  }
+
+  const localEnglishVoice = availableVoices.find(
+    (voice) =>
+      voice.lang.toLowerCase().startsWith("en") &&
+      voice.localService
+  );
+  if (localEnglishVoice) {
+    return localEnglishVoice;
+  }
+
+  return availableVoices.find((voice) => voice.lang.toLowerCase().startsWith("en")) || availableVoices[0];
+}
+
+function wait(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function primeSpeech() {
+  if (speechPrimed || !("speechSynthesis" in window)) {
+    return;
+  }
+
+  speechPrimed = true;
+  const utterance = new SpeechSynthesisUtterance(" ");
+  utterance.volume = 0;
+  utterance.rate = 1;
+  utterance.pitch = 1;
+  const preferredVoice = getPreferredVoice();
+
+  if (preferredVoice) {
+    utterance.voice = preferredVoice;
+    utterance.lang = preferredVoice.lang;
+  }
+
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+  window.setTimeout(() => {
+    window.speechSynthesis.cancel();
+  }, 20);
+}
 
 function loadState() {
   try {
@@ -55,6 +145,34 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+}
+
+function loadProfile() {
+  try {
+    const saved = sessionStorage.getItem(SESSION_KEY);
+    if (!saved) {
+      return null;
+    }
+
+    const parsed = JSON.parse(saved);
+    if (!parsed || !PROFILES[parsed.role]?.includes(parsed.name)) {
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveProfile(profile) {
+  activeProfile = profile;
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify(profile));
+}
+
+function clearProfile() {
+  activeProfile = null;
+  sessionStorage.removeItem(SESSION_KEY);
 }
 
 function setActiveView(viewName) {
@@ -134,7 +252,7 @@ function renderRequests() {
 
       const reply = document.createElement("p");
       reply.className = "request-reply";
-      reply.textContent = request.reply || "Chef Bot is still thinking...";
+      reply.textContent = request.reply || "";
 
       const removeButton = document.createElement("button");
       removeButton.className = "request-remove";
@@ -176,16 +294,203 @@ function updateReplyCard(title, message) {
   replyOutput.textContent = message;
 }
 
-function speakReply(message) {
-  if (!("speechSynthesis" in window) || !message) {
+function setReplyThinking(isThinking) {
+  thinkingIndicator.classList.toggle("is-hidden", !isThinking);
+}
+
+function scheduleReplyReveal(title, message, delay = 0) {
+  if (replyRevealTimeoutId) {
+    window.clearTimeout(replyRevealTimeoutId);
+  }
+
+  updateReplyCard("", "");
+  if (delay <= 0) {
+    updateReplyCard(title, message);
+    replyRevealTimeoutId = null;
     return;
   }
 
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(message);
-  utterance.rate = 1;
-  utterance.pitch = 1.15;
-  window.speechSynthesis.speak(utterance);
+  replyRevealTimeoutId = window.setTimeout(() => {
+    updateReplyCard(title, message);
+    replyRevealTimeoutId = null;
+  }, delay);
+}
+
+function renderProfileNames(role) {
+  profileNameGrid.innerHTML = "";
+
+  if (!role || !PROFILES[role]) {
+    return;
+  }
+
+  PROFILES[role].forEach((name, index) => {
+    const label = document.createElement("label");
+    label.className = "name-option";
+
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "profileName";
+    input.value = name;
+    if (index === 0) {
+      input.checked = true;
+    }
+
+    const span = document.createElement("span");
+    span.textContent = name;
+
+    label.append(input, span);
+    profileNameGrid.append(label);
+  });
+}
+
+function renderHeaderNamePicker(role, selectedName) {
+  headerNamePicker.innerHTML = "";
+
+  if (!role || !PROFILES[role]) {
+    return;
+  }
+
+  PROFILES[role].forEach((name) => {
+    const label = document.createElement("label");
+    label.className = "name-option";
+
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "headerProfileName";
+    input.value = name;
+    input.checked = name === selectedName;
+    input.addEventListener("change", () => {
+      if (!activeProfile) {
+        return;
+      }
+
+      saveProfile({ role, name });
+      applyProfile(activeProfile);
+    });
+
+    const span = document.createElement("span");
+    span.textContent = name;
+
+    label.append(input, span);
+    headerNamePicker.append(label);
+  });
+}
+
+function getSelectedProfileRole() {
+  const selected = Array.from(profileRoleInputs).find((input) => input.checked);
+  return selected ? selected.value : "";
+}
+
+function getSelectedProfileName() {
+  const selected = profileNameGrid.querySelector('input[name="profileName"]:checked');
+  return selected ? selected.value : "";
+}
+
+function applyProfile(profile) {
+  if (!profile) {
+    onboardingOverlay.classList.remove("is-hidden");
+    document.body.classList.add("is-locked");
+    headerNamePicker.innerHTML = "";
+    setActiveView("kids");
+    return;
+  }
+
+  onboardingOverlay.classList.add("is-hidden");
+  document.body.classList.remove("is-locked");
+  renderHeaderNamePicker(profile.role, profile.name);
+  setActiveView(profile.role);
+}
+
+function speakMessage(message, options = {}) {
+  if (!("speechSynthesis" in window) || !message) {
+    options.onStart?.();
+    return Promise.resolve(false);
+  }
+
+  return new Promise((resolve) => {
+    let started = false;
+    const utterance = new SpeechSynthesisUtterance(message);
+    const preferredVoice = options.voice || getPreferredVoice();
+
+    if (preferredVoice) {
+      utterance.voice = preferredVoice;
+      utterance.lang = preferredVoice.lang;
+    } else {
+      utterance.lang = "en-US";
+    }
+
+    utterance.rate = options.rate ?? 0.96;
+    utterance.pitch = options.pitch ?? 1.05;
+    utterance.volume = options.volume ?? 1;
+    utterance.onstart = () => {
+      started = true;
+      options.onStart?.();
+      resolve(true);
+    };
+    utterance.onerror = () => {
+      if (!started) {
+        options.onStart?.();
+        resolve(false);
+      }
+    };
+
+    const speakUtterance = async () => {
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+        window.speechSynthesis.cancel();
+        await wait(60);
+      }
+
+      window.speechSynthesis.speak(utterance);
+
+      window.setTimeout(() => {
+        if (!started) {
+          options.onStart?.();
+          resolve(false);
+        }
+      }, 400);
+    };
+
+    void speakUtterance();
+  });
+}
+
+function speakReply(message, options = {}) {
+  return speakMessage(message, options);
+}
+
+async function playAudioOnce(source) {
+  const audio = new Audio(source);
+  audio.preload = "auto";
+  await audio.play();
+}
+
+async function playGandalfLine() {
+  try {
+    await playAudioOnce(GANDALF_AUDIO_PATH);
+  } catch {
+    await speakMessage("You shall not pass", {
+      voice: getGandalfVoice(),
+      rate: 0.84,
+      pitch: 0.66,
+      volume: 1,
+    });
+  }
+}
+
+function getGandalfVoice() {
+  if (!availableVoices.length) {
+    return null;
+  }
+
+  return (
+    availableVoices.find(
+      (voice) =>
+        voice.lang.toLowerCase().startsWith("en") &&
+        (/david|daniel|fred|george|male/i.test(voice.name) ||
+          voice.name.includes("Google UK English Male") ||
+          voice.name.includes("Microsoft Ryan"))
+    ) || getPreferredVoice()
+  );
 }
 
 function getClientFallbackReply(food, childName) {
@@ -193,17 +498,12 @@ function getClientFallbackReply(food, childName) {
   return `${childName}, you want ${food}? ${clientFallbackReplies[index]}`;
 }
 
-function getSelectedChildName() {
-  const selected = Array.from(childNameInputs).find((input) => input.checked);
-  return selected ? selected.value : "";
-}
-
 async function submitRequest(rawValue) {
   const name = rawValue.trim();
-  const childName = getSelectedChildName();
+  const childName = activeProfile?.name || "";
 
-  if (!childName) {
-    requestStatus.textContent = "Pick your name before sending a food request.";
+  if (!activeProfile || activeProfile.role !== "kids") {
+    requestStatus.textContent = "Please enter as a kid before sending a food request.";
     return;
   }
 
@@ -225,11 +525,8 @@ async function submitRequest(rawValue) {
   saveState();
   renderRequests();
   requestForm.reset();
-  const selectedInput = Array.from(childNameInputs).find((input) => input.value === childName);
-  if (selectedInput) {
-    selectedInput.checked = true;
-  }
   requestStatus.textContent = `${childName} asked for ${name}.`;
+  setReplyThinking(true);
   updateReplyCard("", "");
   requestInput.focus();
 
@@ -238,20 +535,32 @@ async function submitRequest(rawValue) {
     request.reply = result.reply;
     saveState();
     renderRequests();
-    updateReplyCard("Chef Bot says", result.reply);
-    speakReply(result.reply);
+    await speakReply(result.reply, {
+      onStart: () => {
+        setReplyThinking(false);
+        scheduleReplyReveal("Chef Bot says", result.reply);
+      },
+    });
   } catch {
     request.reply = getClientFallbackReply(name, childName);
     saveState();
     renderRequests();
-    updateReplyCard("Chef Bot dropped the spoon", request.reply);
-    speakReply(request.reply);
+    await speakReply(request.reply, {
+      onStart: () => {
+        setReplyThinking(false);
+        scheduleReplyReveal("Chef Bot dropped the spoon", request.reply);
+      },
+    });
   }
 }
 
 roleTabs.forEach((tab) => {
   tab.addEventListener("click", () => {
-    setActiveView(tab.dataset.viewTarget);
+    const role = tab.dataset.viewTarget;
+    const currentName = activeProfile && activeProfile.role === role ? activeProfile.name : PROFILES[role][0];
+
+    saveProfile({ role, name: currentName });
+    applyProfile(activeProfile);
   });
 
   tab.addEventListener("keydown", (event) => {
@@ -269,13 +578,17 @@ roleTabs.forEach((tab) => {
 
     event.preventDefault();
     const nextTab = orderedTabs[nextIndex];
-    setActiveView(nextTab.dataset.viewTarget);
+    const role = nextTab.dataset.viewTarget;
+    const currentName = activeProfile && activeProfile.role === role ? activeProfile.name : PROFILES[role][0];
+    saveProfile({ role, name: currentName });
+    applyProfile(activeProfile);
     nextTab.focus();
   });
 });
 
 suggestionButtons.forEach((button) => {
   button.addEventListener("click", () => {
+    primeSpeech();
     requestInput.value = button.dataset.suggestion;
     void submitRequest(button.dataset.suggestion || "");
   });
@@ -283,6 +596,7 @@ suggestionButtons.forEach((button) => {
 
 requestForm.addEventListener("submit", (event) => {
   event.preventDefault();
+  primeSpeech();
   void submitRequest(requestInput.value);
 });
 
@@ -298,7 +612,7 @@ plannerForm.addEventListener("submit", (event) => {
 
   saveState();
   updateMealDisplays();
-  setActiveView("kids");
+  setActiveView(activeProfile?.role || "parent");
   requestStatus.textContent = "Today's menu is updated.";
 });
 
@@ -308,6 +622,51 @@ clearRequestsButton.addEventListener("click", () => {
   renderRequests();
 });
 
+profileRoleInputs.forEach((input) => {
+  input.addEventListener("change", () => {
+    renderProfileNames(input.value);
+    parentCodeSection.classList.toggle("is-hidden", input.value !== "parent");
+    if (input.value !== "parent") {
+      parentCodeInput.value = "";
+    }
+    profileStatus.textContent = "";
+  });
+});
+
+profileSubmitButton.addEventListener("click", () => {
+  primeSpeech();
+  const role = getSelectedProfileRole();
+  const name = getSelectedProfileName();
+
+  if (!role) {
+    profileStatus.textContent = "Choose whether you are a kid or a parent first.";
+    return;
+  }
+
+  if (!name) {
+    profileStatus.textContent = "Choose your name first.";
+    return;
+  }
+
+  if (role === "parent" && parentCodeInput.value !== PARENT_CODE) {
+    profileStatus.textContent = "You shall not pass";
+    void playGandalfLine();
+    parentCodeInput.focus();
+    parentCodeInput.select();
+    return;
+  }
+
+  saveProfile({ role, name });
+  profileStatus.textContent = "";
+  parentCodeInput.value = "";
+  applyProfile(activeProfile);
+});
+
+loadVoices();
+if ("speechSynthesis" in window) {
+  window.speechSynthesis.addEventListener("voiceschanged", loadVoices);
+}
+
 updateMealDisplays();
 renderRequests();
-setActiveView("kids");
+applyProfile(activeProfile);

@@ -98,6 +98,34 @@
       </section>
 
       <section class="dashboard">
+        <article class="card menu-card" aria-label="Today's menu">
+          <div class="card-header">
+            <p class="card-kicker">Today</p>
+          </div>
+
+          <div class="meal-grid">
+            <section class="meal-panel lunch-panel" aria-labelledby="lunch-title">
+              <p class="meal-label">Lunch</p>
+              <h3 id="lunch-title" class="meal-name" data-meal-display="lunch">
+                No lunch planned yet
+              </h3>
+              <p class="meal-note" data-note-display="lunch">
+                Add the lunch plan in the parent view.
+              </p>
+            </section>
+
+            <section class="meal-panel dinner-panel" aria-labelledby="dinner-title">
+              <p class="meal-label">Dinner</p>
+              <h3 id="dinner-title" class="meal-name" data-meal-display="dinner">
+                No dinner planned yet
+              </h3>
+              <p class="meal-note" data-note-display="dinner">
+                Add the dinner plan in the parent view.
+              </p>
+            </section>
+          </div>
+        </article>
+
         <article
           class="card interactive-card view-panel is-active"
           id="kids-main-panel"
@@ -122,9 +150,6 @@
             <button class="suggestion-chip" type="button" data-suggestion="Pizza">
               Pizza
             </button>
-            <button class="suggestion-chip" type="button" data-suggestion="Soup">
-              Soup
-            </button>
             <button class="suggestion-chip" type="button" data-suggestion="Rice">
               Rice
             </button>
@@ -137,6 +162,20 @@
           </div>
 
           <form class="request-form" id="request-form">
+            <div class="meal-choice-group">
+              <p class="input-label">Meal</p>
+              <div class="meal-choice-grid" role="radiogroup" aria-label="Choose meal">
+                <label class="name-option">
+                  <input type="radio" name="mealType" value="lunch" checked />
+                  <span>Lunch</span>
+                </label>
+                <label class="name-option">
+                  <input type="radio" name="mealType" value="dinner" />
+                  <span>Dinner</span>
+                </label>
+              </div>
+            </div>
+
             <label class="input-label" for="request-input">My food idea</label>
             <div class="input-row">
               <input
@@ -148,11 +187,30 @@
                 autocomplete="off"
                 required
               />
-              <button class="primary-button" type="submit">Send</button>
+              <button class="primary-button" id="request-submit-button" type="submit">
+                Send
+              </button>
             </div>
           </form>
 
           <p class="status-message" id="request-status" role="status" aria-live="polite"></p>
+
+          <section class="requests-board kid-requests-board" aria-labelledby="kid-requests-title">
+            <div class="requests-header">
+              <h3 id="kid-requests-title">Your requests today</h3>
+              <button
+                class="secondary-button is-hidden"
+                id="cancel-request-edit"
+                type="button"
+              >
+                Cancel edit
+              </button>
+            </div>
+            <ul class="request-list" id="kid-request-list"></ul>
+            <p class="empty-state" id="empty-kid-requests">
+              Your requests for today will show up here.
+            </p>
+          </section>
         </article>
 
         <article
@@ -162,12 +220,110 @@
           role="tabpanel"
           aria-labelledby="kids-tab"
         >
-          <div class="card-header">
-            <p class="card-kicker">Chef Bot</p>
-            <h2>Kitchen response</h2>
-          </div>
-
           <section class="reply-card standalone-reply-card" aria-labelledby="reply-title">
+            <div class="reply-topbar">
+              <div class="chef-illustration" aria-hidden="true">
+                <svg viewBox="0 0 220 220" role="img" focusable="false">
+                  <defs>
+                    <linearGradient id="chefMetal" x1="0%" x2="100%" y1="0%" y2="100%">
+                      <stop offset="0%" stop-color="#fff8ef" />
+                      <stop offset="100%" stop-color="#cfd7e6" />
+                    </linearGradient>
+                    <linearGradient id="chefAccent" x1="0%" x2="100%" y1="0%" y2="100%">
+                      <stop offset="0%" stop-color="#ff9c55" />
+                      <stop offset="100%" stop-color="#ff6889" />
+                    </linearGradient>
+                  </defs>
+                  <ellipse cx="110" cy="196" rx="62" ry="12" fill="rgba(36,49,63,0.12)" />
+                  <path
+                    d="M71 73c-11 0-21-8-21-20 0-11 8-20 19-20 3 0 7 1 10 3 4-11 14-18 26-18 14 0 25 9 28 22 3-2 6-3 10-3 11 0 20 9 20 20 0 12-9 21-21 21H71Z"
+                    fill="#fffdf7"
+                    stroke="#d9dfea"
+                    stroke-width="4"
+                    stroke-linejoin="round"
+                  />
+                  <rect
+                    x="77"
+                    y="71"
+                    width="66"
+                    height="85"
+                    rx="26"
+                    fill="url(#chefMetal)"
+                    stroke="#8e9db7"
+                    stroke-width="4"
+                  />
+                  <rect x="94" y="52" width="32" height="20" rx="8" fill="#edf2fa" stroke="#8e9db7" stroke-width="4" />
+                  <circle cx="96" cy="101" r="11" fill="#24313f" />
+                  <circle cx="124" cy="101" r="11" fill="#24313f" />
+                  <circle cx="99" cy="98" r="4" fill="#7df7ff" />
+                  <circle cx="127" cy="98" r="4" fill="#7df7ff" />
+                  <path
+                    d="M92 128c8 10 28 10 36 0"
+                    fill="none"
+                    stroke="url(#chefAccent)"
+                    stroke-width="6"
+                    stroke-linecap="round"
+                  />
+                  <circle cx="84" cy="116" r="3" fill="#8e9db7" />
+                  <circle cx="136" cy="116" r="3" fill="#8e9db7" />
+                  <rect x="62" y="92" width="16" height="44" rx="8" fill="#dbe2ef" stroke="#8e9db7" stroke-width="4" />
+                  <rect x="142" y="92" width="16" height="44" rx="8" fill="#dbe2ef" stroke="#8e9db7" stroke-width="4" />
+                  <path d="M66 141l-18 22" stroke="#8e9db7" stroke-width="5" stroke-linecap="round" />
+                  <path d="M154 141l18 22" stroke="#8e9db7" stroke-width="5" stroke-linecap="round" />
+                  <path d="M92 155v20" stroke="#8e9db7" stroke-width="5" stroke-linecap="round" />
+                  <path d="M128 155v20" stroke="#8e9db7" stroke-width="5" stroke-linecap="round" />
+                  <path d="M156 79h20" stroke="#ff8a3d" stroke-width="4" stroke-linecap="round" />
+                  <circle cx="184" cy="79" r="6" fill="#ff6889" />
+                  <path
+                    d="M38 78c14-7 21-3 24 1M176 118c15 5 20 13 20 19M32 130c10-1 15 4 16 11"
+                    fill="none"
+                    stroke="#ffb35f"
+                    stroke-width="4"
+                    stroke-linecap="round"
+                  />
+                </svg>
+              </div>
+              <div
+                class="llm-status-badge is-hidden"
+                id="llm-status-badge"
+                role="status"
+                aria-live="polite"
+                aria-label="Response source status"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path
+                    class="wifi-arc wifi-arc-outer"
+                    d="M3.5 8.5a13 13 0 0 1 17 0"
+                    fill="none"
+                    stroke-linecap="round"
+                    stroke-width="2"
+                  />
+                  <path
+                    class="wifi-arc wifi-arc-mid"
+                    d="M7 12a8 8 0 0 1 10 0"
+                    fill="none"
+                    stroke-linecap="round"
+                    stroke-width="2"
+                  />
+                  <path
+                    class="wifi-arc wifi-arc-inner"
+                    d="M10.5 15.5a3 3 0 0 1 3 0"
+                    fill="none"
+                    stroke-linecap="round"
+                    stroke-width="2"
+                  />
+                  <circle class="wifi-dot" cx="12" cy="19" r="1.6" />
+                  <path
+                    class="wifi-slash"
+                    d="M5 4.5 19 19.5"
+                    fill="none"
+                    stroke-linecap="round"
+                    stroke-width="2.4"
+                  />
+                </svg>
+                <span id="llm-status-text">OpenAI</span>
+              </div>
+            </div>
             <div class="thinking-indicator is-hidden" id="thinking-indicator" aria-live="polite">
               <div class="thinking-bubbles" aria-hidden="true">
                 <span></span>
@@ -192,6 +348,10 @@
             <p class="card-kicker">Parent desk</p>
             <h2 id="parent-title">Plan today&apos;s meals</h2>
           </div>
+
+          <a class="secondary-button analysis-link" id="analysis-link" href="/analysis.html">
+            Open request analysis
+          </a>
 
           <form class="planner-form" id="planner-form">
             <label class="input-label" for="lunch-input">Lunch</label>
@@ -248,9 +408,9 @@
             <h2>Kids&apos; requests</h2>
           </div>
 
-          <section class="requests-board" aria-labelledby="requests-title">
+          <section class="requests-board" aria-labelledby="parent-requests-title">
             <div class="requests-header">
-              <h3 id="requests-title">Kids&apos; requests</h3>
+              <span id="parent-requests-title" class="sr-only">Kids&apos; requests</span>
               <button class="secondary-button" id="clear-requests" type="button">
                 Clear all
               </button>
@@ -262,34 +422,6 @@
           </section>
         </article>
 
-        <article class="card menu-card" aria-labelledby="menu-title">
-          <div class="card-header">
-            <p class="card-kicker">Today</p>
-            <h2 id="menu-title">Lunch and dinner</h2>
-          </div>
-
-          <div class="meal-grid">
-            <section class="meal-panel lunch-panel" aria-labelledby="lunch-title">
-              <p class="meal-label">Lunch</p>
-              <h3 id="lunch-title" class="meal-name" data-meal-display="lunch">
-                No lunch planned yet
-              </h3>
-              <p class="meal-note" data-note-display="lunch">
-                Add the lunch plan in the parent view.
-              </p>
-            </section>
-
-            <section class="meal-panel dinner-panel" aria-labelledby="dinner-title">
-              <p class="meal-label">Dinner</p>
-              <h3 id="dinner-title" class="meal-name" data-meal-display="dinner">
-                No dinner planned yet
-              </h3>
-              <p class="meal-note" data-note-display="dinner">
-                Add the dinner plan in the parent view.
-              </p>
-            </section>
-          </div>
-        </article>
       </section>
     </main>
 

@@ -15,14 +15,22 @@ const viewPanels = document.querySelectorAll("[data-view-panel]");
 const requestForm = document.getElementById("request-form");
 const plannerForm = document.getElementById("planner-form");
 const requestInput = document.getElementById("request-input");
+const mealTypeInputs = document.querySelectorAll('input[name="mealType"]');
 const requestList = document.getElementById("request-list");
 const emptyRequests = document.getElementById("empty-requests");
 const requestStatus = document.getElementById("request-status");
 const clearRequestsButton = document.getElementById("clear-requests");
+const analysisLink = document.getElementById("analysis-link");
+const requestSubmitButton = document.getElementById("request-submit-button");
+const cancelRequestEditButton = document.getElementById("cancel-request-edit");
+const kidRequestList = document.getElementById("kid-request-list");
+const emptyKidRequests = document.getElementById("empty-kid-requests");
 const suggestionButtons = document.querySelectorAll("[data-suggestion]");
 const replyOutput = document.getElementById("reply-output");
 const replyTitle = document.getElementById("reply-title");
 const thinkingIndicator = document.getElementById("thinking-indicator");
+const llmStatusBadge = document.getElementById("llm-status-badge");
+const llmStatusText = document.getElementById("llm-status-text");
 const onboardingOverlay = document.getElementById("onboarding-overlay");
 const profileStatus = document.getElementById("profile-status");
 const profileSubmitButton = document.getElementById("profile-submit");
@@ -38,14 +46,23 @@ const clientFallbackReplies = [
   "Bold move. The fridge is pretending it did not hear that.",
   "Strong choice. Someone tell the plates to brace themselves.",
 ];
-const preferredVoiceNames = [
+const BRITISH_VOICE_NAMES = [
+  "Google UK English Female",
+  "Google UK English Male",
+  "Microsoft Sonia Online (Natural)",
+  "Microsoft Ryan Online (Natural)",
+  "Serena",
+  "Daniel",
+  "Kate",
+];
+const AMERICAN_VOICE_NAMES = [
+  "Microsoft Jenny Online (Natural)",
+  "Microsoft Aria Online (Natural)",
   "Samantha",
   "Karen",
-  "Moira",
   "Google US English",
-  "Google UK English Female",
-  "Microsoft Aria Online (Natural)",
-  "Microsoft Jenny Online (Natural)",
+  "Aaron",
+  "Nicky",
 ];
 const SESSION_KEY = "feedme-profile";
 const PARENT_CODE = "!!!";
@@ -60,6 +77,20 @@ let availableVoices = [];
 let activeProfile = loadProfile();
 let replyRevealTimeoutId = null;
 let speechPrimed = false;
+let editingRequestId = null;
+let nextReplyAccent = "british";
+
+function setSelectedMealType(mealType) {
+  const normalizedMealType = mealType === "dinner" ? "dinner" : "lunch";
+  mealTypeInputs.forEach((input) => {
+    input.checked = input.value === normalizedMealType;
+  });
+}
+
+function getSelectedMealType() {
+  const selected = Array.from(mealTypeInputs).find((input) => input.checked);
+  return selected?.value === "dinner" ? "dinner" : "lunch";
+}
 
 function loadVoices() {
   if (!("speechSynthesis" in window)) {
@@ -74,7 +105,7 @@ function getPreferredVoice() {
     return null;
   }
 
-  for (const voiceName of preferredVoiceNames) {
+  for (const voiceName of AMERICAN_VOICE_NAMES) {
     const match = availableVoices.find((voice) => voice.name === voiceName);
     if (match) {
       return match;
@@ -93,6 +124,56 @@ function getPreferredVoice() {
   return availableVoices.find((voice) => voice.lang.toLowerCase().startsWith("en")) || availableVoices[0];
 }
 
+function findVoiceByNames(voiceNames) {
+  for (const voiceName of voiceNames) {
+    const match = availableVoices.find((voice) => voice.name === voiceName);
+    if (match) {
+      return match;
+    }
+  }
+
+  return null;
+}
+
+function findVoiceByLangPrefix(langPrefix) {
+  return (
+    availableVoices.find((voice) => voice.lang.toLowerCase().startsWith(langPrefix) && voice.localService) ||
+    availableVoices.find((voice) => voice.lang.toLowerCase().startsWith(langPrefix)) ||
+    null
+  );
+}
+
+function getBritishVoice() {
+  return findVoiceByNames(BRITISH_VOICE_NAMES) || findVoiceByLangPrefix("en-gb") || getPreferredVoice();
+}
+
+function getAmericanVoice() {
+  return findVoiceByNames(AMERICAN_VOICE_NAMES) || findVoiceByLangPrefix("en-us") || getPreferredVoice();
+}
+
+function getNextReplyVoiceStyle() {
+  const accent = nextReplyAccent;
+  nextReplyAccent = nextReplyAccent === "british" ? "hillbilly" : "british";
+
+  if (accent === "british") {
+    const voice = getBritishVoice();
+    return {
+      voice,
+      lang: voice?.lang || "en-GB",
+      rate: 0.94,
+      pitch: 1,
+    };
+  }
+
+  const voice = getAmericanVoice();
+  return {
+    voice,
+    lang: voice?.lang || "en-US",
+    rate: 0.88,
+    pitch: 0.82,
+  };
+}
+
 function wait(ms) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -109,7 +190,7 @@ function primeSpeech() {
   utterance.volume = 0;
   utterance.rate = 1;
   utterance.pitch = 1;
-  const preferredVoice = getPreferredVoice();
+  const preferredVoice = getBritishVoice() || getPreferredVoice();
 
   if (preferredVoice) {
     utterance.voice = preferredVoice;
@@ -132,11 +213,11 @@ function loadState() {
 
     const parsed = JSON.parse(saved);
     return {
+      requests: [],
       menu: {
         ...defaultState.menu,
         ...parsed.menu,
       },
-      requests: Array.isArray(parsed.requests) ? parsed.requests : [],
     };
   } catch {
     return structuredClone(defaultState);
@@ -144,7 +225,12 @@ function loadState() {
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      menu: state.menu,
+    })
+  );
 }
 
 function loadProfile() {
@@ -188,6 +274,10 @@ function setActiveView(viewName) {
     panel.classList.toggle("is-active", isActive);
     panel.hidden = !isActive;
   });
+
+  if (analysisLink) {
+    analysisLink.classList.toggle("is-hidden", viewName !== "parent");
+  }
 }
 
 function updateMealDisplays() {
@@ -219,8 +309,127 @@ function formatTime(timestamp) {
   }).format(new Date(timestamp));
 }
 
+function getDateKey(timestamp) {
+  const date = new Date(timestamp);
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isToday(timestamp) {
+  return getDateKey(timestamp) === getDateKey(Date.now());
+}
+
+function resetRequestEditing() {
+  editingRequestId = null;
+  requestForm.reset();
+  setSelectedMealType("lunch");
+  requestSubmitButton.textContent = "Send";
+  cancelRequestEditButton.classList.add("is-hidden");
+}
+
+function startRequestEditing(request) {
+  editingRequestId = request.id;
+  requestInput.value = request.name;
+  setSelectedMealType(request.mealType || "lunch");
+  requestSubmitButton.textContent = "Save";
+  cancelRequestEditButton.classList.remove("is-hidden");
+  requestStatus.textContent = `Editing ${request.name}.`;
+  requestInput.focus();
+  requestInput.select();
+}
+
+function renderRequestReply(container, request) {
+  const reply = document.createElement("p");
+  reply.className = "request-reply";
+  reply.textContent = request.reply || "";
+  container.append(reply);
+
+  if (request.snottyRemark) {
+    const remark = document.createElement("p");
+    remark.className = "request-remark";
+    remark.textContent = request.snottyRemark;
+    container.append(remark);
+  }
+}
+
+function formatMealType(mealType) {
+  return mealType === "dinner" ? "Dinner" : "Lunch";
+}
+
+function getCurrentKidRequests() {
+  if (!activeProfile || activeProfile.role !== "kids") {
+    return [];
+  }
+
+  return state.requests
+    .filter((request) => request.childName === activeProfile.name && isToday(request.createdAt))
+    .sort((left, right) => right.createdAt - left.createdAt);
+}
+
+function renderKidRequests() {
+  kidRequestList.innerHTML = "";
+
+  const kidRequests = getCurrentKidRequests();
+  if (!kidRequests.length) {
+    emptyKidRequests.classList.remove("is-hidden");
+    return;
+  }
+
+  emptyKidRequests.classList.add("is-hidden");
+
+  kidRequests.forEach((request) => {
+    const item = document.createElement("li");
+    item.className = "request-item";
+
+    const content = document.createElement("div");
+
+    const name = document.createElement("p");
+    name.className = "request-name";
+    name.textContent = `${formatMealType(request.mealType)}: ${request.name}`;
+
+    const time = document.createElement("p");
+    time.className = "request-time";
+    time.textContent = request.updatedAt
+      ? `Updated at ${formatTime(request.updatedAt)}`
+      : `Sent at ${formatTime(request.createdAt)}`;
+
+    content.append(name, time);
+
+    const actions = document.createElement("div");
+    actions.className = "request-actions";
+
+    const editButton = document.createElement("button");
+    editButton.className = "request-edit";
+    editButton.type = "button";
+    editButton.textContent = "Edit";
+    editButton.addEventListener("click", () => {
+      startRequestEditing(request);
+    });
+
+    const removeButton = document.createElement("button");
+    removeButton.className = "request-remove";
+    removeButton.type = "button";
+    removeButton.textContent = "Remove";
+    removeButton.setAttribute("aria-label", `Remove request for ${request.name}`);
+    removeButton.addEventListener("click", async () => {
+      await archiveRequest(request.id);
+    });
+
+    actions.append(editButton, removeButton);
+    item.append(content, actions);
+    kidRequestList.append(item);
+  });
+
+  if (editingRequestId && !kidRequests.some((request) => request.id === editingRequestId)) {
+    resetRequestEditing();
+  }
+}
+
 function renderRequests() {
   requestList.innerHTML = "";
+  renderKidRequests();
 
   if (!state.requests.length) {
     emptyRequests.classList.remove("is-hidden");
@@ -240,7 +449,7 @@ function renderRequests() {
 
       const name = document.createElement("p");
       name.className = "request-name";
-      name.textContent = request.name;
+      name.textContent = `${formatMealType(request.mealType)}: ${request.name}`;
 
       const child = document.createElement("p");
       child.className = "request-child";
@@ -248,46 +457,100 @@ function renderRequests() {
 
       const time = document.createElement("p");
       time.className = "request-time";
-      time.textContent = `Sent at ${formatTime(request.createdAt)}`;
-
-      const reply = document.createElement("p");
-      reply.className = "request-reply";
-      reply.textContent = request.reply || "";
+      time.textContent = request.updatedAt
+        ? `Updated at ${formatTime(request.updatedAt)}`
+        : `Sent at ${formatTime(request.createdAt)}`;
 
       const removeButton = document.createElement("button");
       removeButton.className = "request-remove";
       removeButton.type = "button";
       removeButton.textContent = "Done";
       removeButton.setAttribute("aria-label", `Remove request for ${request.name}`);
-      removeButton.addEventListener("click", () => {
-        state.requests = state.requests.filter((entry) => entry.id !== request.id);
-        saveState();
-        renderRequests();
+      removeButton.addEventListener("click", async () => {
+        await archiveRequest(request.id);
       });
 
-      content.append(child, name, time, reply);
+      content.append(child, name, time);
+      renderRequestReply(content, request);
       item.append(content, removeButton);
       requestList.append(item);
     });
+
 }
 
-async function fetchCheekyReply(food) {
-  const response = await fetch("/api/cheeky-response", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ food }),
-  });
+async function fetchJson(url, options = {}) {
+  const response = await fetch(url, options);
 
   if (!response.ok) {
-    throw new Error("Cheeky response failed");
+    throw new Error(`Request failed: ${response.status}`);
   }
 
   return response.json();
 }
 
+async function refreshRequests() {
+  try {
+    const payload = await fetchJson("/api/requests");
+    state.requests = Array.isArray(payload.requests) ? payload.requests : [];
+    renderRequests();
+  } catch {
+    requestStatus.textContent = "Could not load saved requests from the server.";
+  }
+}
+
+async function archiveRequest(requestId) {
+  try {
+    const payload = await fetchJson(`/api/requests/${requestId}/archive`, {
+      method: "POST",
+    });
+    state.requests = Array.isArray(payload.requests) ? payload.requests : [];
+    renderRequests();
+  } catch {
+    requestStatus.textContent = "Could not archive that request right now.";
+  }
+}
+
+async function saveRequest(food, mealType) {
+  if (editingRequestId) {
+    const result = await fetchJson(`/api/requests/${editingRequestId}/update`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        childName: activeProfile?.name || "",
+        food,
+        mealType,
+      }),
+    });
+
+    state.requests = state.requests.map((request) =>
+      request.id === result.request.id ? result.request : request
+    );
+    return result.request;
+  }
+
+  const result = await fetchJson("/api/requests", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      childName: activeProfile?.name || "",
+      food,
+      mealType,
+    }),
+  });
+
+  state.requests.unshift(result.request);
+  return result.request;
+}
+
 function updateReplyCard(title, message) {
+  if (!replyTitle || !replyOutput) {
+    return;
+  }
+
   const hasMessage = Boolean(message && message.trim());
   replyTitle.textContent = title;
   replyTitle.classList.toggle("is-hidden", !hasMessage);
@@ -295,23 +558,53 @@ function updateReplyCard(title, message) {
 }
 
 function setReplyThinking(isThinking) {
+  if (!thinkingIndicator) {
+    return;
+  }
+
   thinkingIndicator.classList.toggle("is-hidden", !isThinking);
 }
 
-function scheduleReplyReveal(title, message, delay = 0) {
+function updateLlmStatus(source) {
+  if (!llmStatusBadge || !llmStatusText) {
+    return;
+  }
+
+  if (!source) {
+    llmStatusBadge.classList.add("is-hidden");
+    llmStatusBadge.classList.remove("is-online", "is-offline");
+    llmStatusText.textContent = "";
+    return;
+  }
+
+  const isOnline = source === "openai";
+  llmStatusBadge.classList.remove("is-hidden");
+  llmStatusBadge.classList.toggle("is-online", isOnline);
+  llmStatusBadge.classList.toggle("is-offline", !isOnline);
+  llmStatusText.textContent = isOnline ? "OpenAI" : "Fallback";
+  llmStatusBadge.setAttribute(
+    "aria-label",
+    isOnline ? "Response generated by OpenAI" : "Response generated by fallback text"
+  );
+}
+
+function scheduleReplyReveal(title, message, source, delay = 0) {
   if (replyRevealTimeoutId) {
     window.clearTimeout(replyRevealTimeoutId);
   }
 
   updateReplyCard("", "");
+  updateLlmStatus("");
   if (delay <= 0) {
     updateReplyCard(title, message);
+    updateLlmStatus(source);
     replyRevealTimeoutId = null;
     return;
   }
 
   replyRevealTimeoutId = window.setTimeout(() => {
     updateReplyCard(title, message);
+    updateLlmStatus(source);
     replyRevealTimeoutId = null;
   }, delay);
 }
@@ -416,7 +709,7 @@ function speakMessage(message, options = {}) {
       utterance.voice = preferredVoice;
       utterance.lang = preferredVoice.lang;
     } else {
-      utterance.lang = "en-US";
+      utterance.lang = options.lang || "en-US";
     }
 
     utterance.rate = options.rate ?? 0.96;
@@ -455,7 +748,11 @@ function speakMessage(message, options = {}) {
 }
 
 function speakReply(message, options = {}) {
-  return speakMessage(message, options);
+  const style = getNextReplyVoiceStyle();
+  return speakMessage(message, {
+    ...style,
+    ...options,
+  });
 }
 
 async function playAudioOnce(source) {
@@ -501,6 +798,8 @@ function getClientFallbackReply(food, childName) {
 async function submitRequest(rawValue) {
   const name = rawValue.trim();
   const childName = activeProfile?.name || "";
+  const mealType = getSelectedMealType();
+  const mealLabel = formatMealType(mealType).toLowerCase();
 
   if (!activeProfile || activeProfile.role !== "kids") {
     requestStatus.textContent = "Please enter as a kid before sending a food request.";
@@ -512,45 +811,39 @@ async function submitRequest(rawValue) {
     return;
   }
 
-  const request = {
-    id: crypto.randomUUID(),
-    childName,
-    name,
-    createdAt: Date.now(),
-    reply: "",
-  };
-
-  state.requests.push(request);
-
-  saveState();
-  renderRequests();
   requestForm.reset();
-  requestStatus.textContent = `${childName} asked for ${name}.`;
+  setSelectedMealType("lunch");
+  requestStatus.textContent = editingRequestId
+    ? `Saving ${mealLabel} request for ${name}...`
+    : `${childName} asked for ${name} for ${mealLabel}.`;
   setReplyThinking(true);
   updateReplyCard("", "");
-  requestInput.focus();
 
   try {
-    const result = await fetchCheekyReply(name);
-    request.reply = result.reply;
-    saveState();
+    const request = await saveRequest(name, mealType);
+    const chefMessage = request.snottyRemark
+      ? `${request.reply} ${request.snottyRemark}`
+      : request.reply;
     renderRequests();
-    await speakReply(result.reply, {
+    const actionLabel = editingRequestId ? "updated" : "asked for";
+    requestStatus.textContent = `${childName} ${actionLabel} ${name} for ${mealLabel}.`;
+    resetRequestEditing();
+    requestInput.focus();
+    await speakReply(chefMessage, {
       onStart: () => {
         setReplyThinking(false);
-        scheduleReplyReveal("Chef Bot says", result.reply);
+        scheduleReplyReveal("Chef Bot says", chefMessage, request.replySource || "fallback");
       },
     });
   } catch {
-    request.reply = getClientFallbackReply(name, childName);
-    saveState();
-    renderRequests();
-    await speakReply(request.reply, {
+    const fallbackReply = getClientFallbackReply(name, childName);
+    setReplyThinking(false);
+    await speakReply(fallbackReply, {
       onStart: () => {
-        setReplyThinking(false);
-        scheduleReplyReveal("Chef Bot dropped the spoon", request.reply);
+        scheduleReplyReveal("Chef Bot dropped the spoon", fallbackReply, "fallback");
       },
     });
+    requestStatus.textContent = "Could not save that request to the server.";
   }
 }
 
@@ -600,6 +893,11 @@ requestForm.addEventListener("submit", (event) => {
   void submitRequest(requestInput.value);
 });
 
+cancelRequestEditButton.addEventListener("click", () => {
+  resetRequestEditing();
+  requestStatus.textContent = "Edit cancelled.";
+});
+
 plannerForm.addEventListener("submit", (event) => {
   event.preventDefault();
 
@@ -617,10 +915,27 @@ plannerForm.addEventListener("submit", (event) => {
 });
 
 clearRequestsButton.addEventListener("click", () => {
-  state.requests = [];
-  saveState();
-  renderRequests();
+  void (async () => {
+    try {
+      const payload = await fetchJson("/api/requests/archive-all", {
+        method: "POST",
+      });
+      state.requests = Array.isArray(payload.requests) ? payload.requests : [];
+      renderRequests();
+    } catch {
+      requestStatus.textContent = "Could not archive requests right now.";
+    }
+  })();
 });
+
+if (analysisLink) {
+  analysisLink.addEventListener("click", (event) => {
+    if (!activeProfile || activeProfile.role !== "parent") {
+      event.preventDefault();
+      profileStatus.textContent = "Only parents can open the analysis page.";
+    }
+  });
+}
 
 profileRoleInputs.forEach((input) => {
   input.addEventListener("change", () => {
@@ -668,5 +983,6 @@ if ("speechSynthesis" in window) {
 }
 
 updateMealDisplays();
-renderRequests();
+void refreshRequests();
 applyProfile(activeProfile);
+setSelectedMealType("lunch");

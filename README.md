@@ -25,6 +25,11 @@ Optional environment variable:
 
 - `OPENAI_MODEL` default is `gpt-5`
 
+Optional local asset:
+
+- `assets/you-shall-not-pass.mp3` to play a recorded parent-code rejection line.
+- If that file does not exist, the app falls back to browser speech synthesis.
+
 ## Notes
 
 - Render free web services may spin down after idle time, so the first request can be slow.

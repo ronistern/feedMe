@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FeedMe Today Analysis</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@400;600;700&family=Nunito:wght@400;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell analysis-shell">
+      <section class="hero analysis-hero">
+        <div class="hero-top">
+          <div class="hero-copy-block">
+            <p class="eyebrow">Parent analytics</p>
+            <h1>Kids Request Analysis</h1>
+            <p class="hero-copy">
+              Review saved requests, frequent meals, and daily volume from the parent side.
+            </p>
+          </div>
+
+          <div class="analysis-actions">
+            <a class="secondary-button analysis-nav-link" href="/">Back to FeedMe Today</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="dashboard analysis-dashboard" id="analysis-dashboard">
+        <article class="card interactive-card analysis-lock-card" id="analysis-lock-card">
+          <div class="card-header">
+            <p class="card-kicker">Access</p>
+            <h2>Parent session required</h2>
+          </div>
+          <p class="section-copy">
+            Open this page from the parent view after signing in as a parent.
+          </p>
+        </article>
+
+        <article class="card menu-card is-hidden" id="analysis-content">
+          <div class="card-header">
+            <p class="card-kicker">Historical data</p>
+            <h2>Request trends</h2>
+          </div>
+
+          <div class="analysis-summary-grid">
+            <section class="analysis-stat-card">
+              <p class="analysis-stat-label">Total requests</p>
+              <p class="analysis-stat-value" id="stat-total">0</p>
+            </section>
+            <section class="analysis-stat-card">
+              <p class="analysis-stat-label">Active requests</p>
+              <p class="analysis-stat-value" id="stat-active">0</p>
+            </section>
+            <section class="analysis-stat-card">
+              <p class="analysis-stat-label">Archived requests</p>
+              <p class="analysis-stat-value" id="stat-archived">0</p>
+            </section>
+          </div>
+
+          <div class="analysis-grid">
+            <section class="analysis-panel" aria-labelledby="top-foods-title">
+              <div class="card-header">
+                <p class="card-kicker">Favorites</p>
+                <h2 id="top-foods-title">Most requested foods</h2>
+              </div>
+              <div class="analysis-bars" id="top-foods-bars"></div>
+              <p class="empty-state is-hidden" id="top-foods-empty">No saved requests yet.</p>
+            </section>
+
+            <section class="analysis-panel" aria-labelledby="by-child-title">
+              <div class="card-header">
+                <p class="card-kicker">Who asks most</p>
+                <h2 id="by-child-title">Requests by child</h2>
+              </div>
+              <div class="analysis-bars" id="child-bars"></div>
+              <p class="empty-state is-hidden" id="child-bars-empty">No saved requests yet.</p>
+            </section>
+
+            <section class="analysis-panel" aria-labelledby="by-day-title">
+              <div class="card-header">
+                <p class="card-kicker">Volume</p>
+                <h2 id="by-day-title">Requests by day</h2>
+              </div>
+              <div class="analysis-bars" id="day-bars"></div>
+              <p class="empty-state is-hidden" id="day-bars-empty">No saved requests yet.</p>
+            </section>
+
+            <section class="analysis-panel" aria-labelledby="history-title">
+              <div class="card-header">
+                <p class="card-kicker">Timeline</p>
+                <h2 id="history-title">Full request history</h2>
+              </div>
+              <div class="analysis-table-wrap">
+                <table class="analysis-table">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Child</th>
+                      <th>Food</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="history-body"></tbody>
+                </table>
+              </div>
+              <p class="empty-state is-hidden" id="history-empty">No saved requests yet.</p>
+            </section>
+          </div>
+          <p class="status-message is-hidden" id="analysis-status" role="status" aria-live="polite"></p>
+        </article>
+      </section>
+    </main>
+
+    <script src="./analysis.js"></script>
+  </body>
+</html>

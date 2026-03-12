@@ -1,11 +1,16 @@
 const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5-nano";
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
+const DATA_FILE = path.join(__dirname, "data", "requests.json");
+const DATA_TEMPLATE = {
+  requests: [],
+};
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -51,7 +56,368 @@ const STYLE_HINTS = [
   "Say it like a game show host revealing a surprise prize.",
   "Say it like a sleepy parent trying to stay funny.",
 ];
+const FALLBACK_SNOTTY_REMARKS = [
+  "Again? Your menu strategy has the range of a broken toaster.",
+  "Yesterday's request called and asked for a little breathing room.",
+  "You really looked at the full universe of food and picked the rerun.",
+  "A fearless commitment to zero culinary plot twists.",
+  "The kitchen noticed this is less a request and more a sequel.",
+  "Remarkable consistency. Terrible suspense.",
+  "Even the leftovers were hoping for a new idea today.",
+  "You are treating the menu like it only has one page.",
+  "Bold to submit the director's cut of yesterday's request.",
+  "The pantry appreciates your loyalty, if not your imagination.",
+  "That choice is so familiar it already knows where the plates live.",
+  "Your request has achieved the rare honor of being pre-owned.",
+  "Stunning dedication to the food version of a replay button.",
+  "The chef was hoping for innovation and got a remastered classic.",
+  "This request feels less new and more syndicated.",
+  "At this rate, the menu can file for routine status.",
+  "The fridge recognized this order before I finished reading it.",
+  "Congratulations on turning lunch into a long-running franchise.",
+  "This meal request has officially entered its repeat era.",
+  "Fresh day, same headline. The kitchen noticed.",
+];
 const recentReplies = [];
+
+async function ensureDataFile() {
+  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
+
+  try {
+    await fs.access(DATA_FILE);
+  } catch {
+    await fs.writeFile(DATA_FILE, JSON.stringify(DATA_TEMPLATE, null, 2));
+  }
+}
+
+async function readData() {
+  await ensureDataFile();
+
+  try {
+    const raw = await fs.readFile(DATA_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return {
+      requests: Array.isArray(parsed.requests) ? parsed.requests : [],
+    };
+  } catch {
+    return structuredClone(DATA_TEMPLATE);
+  }
+}
+
+async function writeData(data) {
+  await ensureDataFile();
+  await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+function sanitizeRequest(record) {
+  return {
+    id: String(record.id || ""),
+    childName: String(record.childName || "").trim().slice(0, 40),
+    name: String(record.name || "").trim().slice(0, 60),
+    mealType: record.mealType === "dinner" ? "dinner" : "lunch",
+    replySource: record.replySource === "openai" ? "openai" : "fallback",
+    createdAt: Number(record.createdAt || Date.now()),
+    updatedAt: record.updatedAt ? Number(record.updatedAt) : null,
+    reply: String(record.reply || "").trim().slice(0, 240),
+    snottyRemark: String(record.snottyRemark || "").trim().slice(0, 240),
+    repeatedFromYesterday: Boolean(record.repeatedFromYesterday),
+    status: record.status === "archived" ? "archived" : "active",
+    archivedAt: record.archivedAt ? Number(record.archivedAt) : null,
+  };
+}
+
+function normalizeFoodName(food) {
+  return String(food || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function getLocalDateKey(timestamp) {
+  const date = new Date(timestamp);
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getYesterdayDateKey(now = Date.now()) {
+  const date = new Date(now);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - 1);
+  return getLocalDateKey(date.getTime());
+}
+
+function isEditableToday(request, childName, now = Date.now()) {
+  return (
+    request.status !== "archived" &&
+    normalizeFoodName(request.childName) === normalizeFoodName(childName) &&
+    getLocalDateKey(request.createdAt) === getLocalDateKey(now)
+  );
+}
+
+function requestedSameFoodYesterday(requests, childName, food, now = Date.now(), excludedRequestId = "") {
+  const yesterdayKey = getYesterdayDateKey(now);
+  const normalizedFood = normalizeFoodName(food);
+  const normalizedChildName = normalizeFoodName(childName);
+
+  return requests.some((request) => {
+    if (request.id === excludedRequestId) {
+      return false;
+    }
+
+    return (
+      normalizeFoodName(request.childName) === normalizedChildName &&
+      normalizeFoodName(request.name) === normalizedFood &&
+      getLocalDateKey(request.createdAt) === yesterdayKey
+    );
+  });
+}
+
+function summarizeRequests(requests) {
+  const sorted = requests
+    .map(sanitizeRequest)
+    .filter((request) => request.id && request.name)
+    .sort((left, right) => right.createdAt - left.createdAt);
+
+  const activeRequests = sorted.filter((request) => request.status === "active");
+  const archivedRequests = sorted.filter((request) => request.status === "archived");
+  const childCounts = new Map();
+  const foodCounts = new Map();
+  const dayCounts = new Map();
+
+  sorted.forEach((request) => {
+    childCounts.set(request.childName, (childCounts.get(request.childName) || 0) + 1);
+    foodCounts.set(request.name, (foodCounts.get(request.name) || 0) + 1);
+
+    const dayKey = new Date(request.createdAt).toISOString().slice(0, 10);
+    dayCounts.set(dayKey, (dayCounts.get(dayKey) || 0) + 1);
+  });
+
+  return {
+    totals: {
+      total: sorted.length,
+      active: activeRequests.length,
+      archived: archivedRequests.length,
+    },
+    activeRequests,
+    requests: sorted,
+    topFoods: Array.from(foodCounts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name))
+      .slice(0, 8),
+    requestsByChild: Array.from(childCounts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((left, right) => right.count - left.count || left.name.localeCompare(right.name)),
+    requestsByDay: Array.from(dayCounts.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((left, right) => left.date.localeCompare(right.date)),
+  };
+}
+
+async function listRequests() {
+  const data = await readData();
+  return summarizeRequests(data.requests);
+}
+
+async function createSnottyRemark(food) {
+  if (!OPENAI_API_KEY) {
+    return FALLBACK_SNOTTY_REMARKS[Math.floor(Math.random() * FALLBACK_SNOTTY_REMARKS.length)];
+  }
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      input: [
+        {
+          role: "system",
+          content: [
+            {
+              type: "input_text",
+              text:
+                "You write one short, snotty but family-safe remark for a child who requested the same food as yesterday. Keep it playful, not mean, and do not use profanity.",
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `Write exactly one sentence about repeating ${food} again today after asking for it yesterday.`,
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`OpenAI request failed: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const remark = String(payload.output_text || "").trim();
+  return remark || FALLBACK_SNOTTY_REMARKS[Math.floor(Math.random() * FALLBACK_SNOTTY_REMARKS.length)];
+}
+
+async function buildRequestResponse(requests, { childName, food, excludedRequestId = "" }) {
+  let reply;
+  let replySource = "openai";
+
+  try {
+    reply = await createCheekyReply(food);
+  } catch (error) {
+    console.error("OpenAI reply generation failed:", error);
+    const fallback = fallbackReply(food);
+    reply = rememberAndReturn(fallback.text, fallback.key);
+    replySource = "fallback";
+  }
+
+  const repeatedFromYesterday = requestedSameFoodYesterday(requests, childName, food, Date.now(), excludedRequestId);
+
+  if (!repeatedFromYesterday) {
+    return {
+      reply,
+      replySource,
+      repeatedFromYesterday: false,
+      snottyRemark: "",
+    };
+  }
+
+  try {
+    const snottyRemark = await createSnottyRemark(food);
+    return {
+      reply,
+      replySource,
+      repeatedFromYesterday: true,
+      snottyRemark,
+    };
+  } catch {
+    return {
+      reply,
+      replySource,
+      repeatedFromYesterday: true,
+      snottyRemark: FALLBACK_SNOTTY_REMARKS[Math.floor(Math.random() * FALLBACK_SNOTTY_REMARKS.length)],
+    };
+  }
+}
+
+async function createRequestRecord({ childName, food, mealType }) {
+  const name = String(food || "").trim().slice(0, 60);
+  const trimmedChildName = String(childName || "").trim().slice(0, 40);
+  const normalizedMealType = mealType === "dinner" ? "dinner" : "lunch";
+
+  if (!name || !trimmedChildName) {
+    return null;
+  }
+
+  const requestRecord = {
+    id: crypto.randomUUID(),
+    childName: trimmedChildName,
+    name,
+    mealType: normalizedMealType,
+    createdAt: Date.now(),
+    updatedAt: null,
+    reply: "",
+    replySource: "fallback",
+    snottyRemark: "",
+    repeatedFromYesterday: false,
+    status: "active",
+    archivedAt: null,
+  };
+
+  const data = await readData();
+  const requestResponse = await buildRequestResponse(data.requests, {
+    childName: trimmedChildName,
+    food: name,
+  });
+
+  requestRecord.reply = requestResponse.reply;
+  requestRecord.replySource = requestResponse.replySource;
+  requestRecord.snottyRemark = requestResponse.snottyRemark;
+  requestRecord.repeatedFromYesterday = requestResponse.repeatedFromYesterday;
+  data.requests.push(requestRecord);
+  await writeData(data);
+
+  return sanitizeRequest(requestRecord);
+}
+
+async function updateRequestRecord(requestId, { childName, food, mealType }) {
+  const name = String(food || "").trim().slice(0, 60);
+  const trimmedChildName = String(childName || "").trim().slice(0, 40);
+  const normalizedMealType = mealType === "dinner" ? "dinner" : "lunch";
+
+  if (!name || !trimmedChildName) {
+    return { error: "Child name and food are required.", statusCode: 400 };
+  }
+
+  const data = await readData();
+  const request = data.requests.find((entry) => entry.id === requestId);
+
+  if (!request) {
+    return { error: "Request not found.", statusCode: 404 };
+  }
+
+  if (!isEditableToday(request, trimmedChildName)) {
+    return { error: "Only today's active requests for this child can be edited.", statusCode: 403 };
+  }
+
+  const requestResponse = await buildRequestResponse(data.requests, {
+    childName: trimmedChildName,
+    food: name,
+    excludedRequestId: requestId,
+  });
+
+  request.name = name;
+  request.mealType = normalizedMealType;
+  request.updatedAt = Date.now();
+  request.reply = requestResponse.reply;
+  request.replySource = requestResponse.replySource;
+  request.snottyRemark = requestResponse.snottyRemark;
+  request.repeatedFromYesterday = requestResponse.repeatedFromYesterday;
+  await writeData(data);
+
+  return { request: sanitizeRequest(request), statusCode: 200 };
+}
+
+async function archiveRequestById(requestId) {
+  const data = await readData();
+  const request = data.requests.find((entry) => entry.id === requestId && entry.status !== "archived");
+
+  if (!request) {
+    return false;
+  }
+
+  request.status = "archived";
+  request.archivedAt = Date.now();
+  await writeData(data);
+  return true;
+}
+
+async function archiveAllActiveRequests() {
+  const data = await readData();
+  let changed = false;
+
+  data.requests.forEach((request) => {
+    if (request.status !== "archived") {
+      request.status = "archived";
+      request.archivedAt = Date.now();
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    await writeData(data);
+  }
+
+  return changed;
+}
 
 function getStaticFilePath(urlPath) {
   const relativePath = urlPath === "/" ? "index.html" : urlPath.replace(/^\/+/, "");
@@ -211,8 +577,9 @@ async function createCheekyReply(food) {
 const server = http.createServer(async (request, response) => {
   try {
     const url = new URL(request.url, `http://${request.headers.host}`);
+    const pathname = url.pathname;
 
-    if (request.method === "POST" && url.pathname === "/api/cheeky-response") {
+    if (request.method === "POST" && pathname === "/api/cheeky-response") {
       const body = await readRequestBody(request);
       const parsed = JSON.parse(body || "{}");
       const food = String(parsed.food || "").trim().slice(0, 60);
@@ -230,6 +597,82 @@ const server = http.createServer(async (request, response) => {
         sendJson(response, 200, { reply: rememberAndReturn(fallback.text, fallback.key), fallback: true });
       }
       return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/requests") {
+      const summary = await listRequests();
+      sendJson(response, 200, { requests: summary.activeRequests });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/analytics/requests") {
+      const summary = await listRequests();
+      sendJson(response, 200, summary);
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/requests") {
+      const body = await readRequestBody(request);
+      const parsed = JSON.parse(body || "{}");
+      const requestRecord = await createRequestRecord({
+        childName: parsed.childName,
+        food: parsed.food,
+        mealType: parsed.mealType,
+      });
+
+      if (!requestRecord) {
+        sendJson(response, 400, { error: "Child name and food are required." });
+        return;
+      }
+
+      sendJson(response, 201, { request: requestRecord });
+      return;
+    }
+
+    if (request.method === "POST" && pathname.startsWith("/api/requests/")) {
+      const [, , , requestId, action] = pathname.split("/");
+
+      if (action === "update" && requestId) {
+        const body = await readRequestBody(request);
+        const parsed = JSON.parse(body || "{}");
+        const result = await updateRequestRecord(requestId, {
+          childName: parsed.childName,
+          food: parsed.food,
+          mealType: parsed.mealType,
+        });
+
+        if (result.error) {
+          sendJson(response, result.statusCode || 400, { error: result.error });
+          return;
+        }
+
+        sendJson(response, 200, { request: result.request });
+        return;
+      }
+    }
+
+    if (request.method === "POST" && pathname === "/api/requests/archive-all") {
+      await archiveAllActiveRequests();
+      const summary = await listRequests();
+      sendJson(response, 200, { requests: summary.activeRequests });
+      return;
+    }
+
+    if (request.method === "POST" && pathname.startsWith("/api/requests/")) {
+      const [, , , requestId, action] = pathname.split("/");
+
+      if (action === "archive" && requestId) {
+        const archived = await archiveRequestById(requestId);
+
+        if (!archived) {
+          sendJson(response, 404, { error: "Request not found." });
+          return;
+        }
+
+        const summary = await listRequests();
+        sendJson(response, 200, { requests: summary.activeRequests });
+        return;
+      }
     }
 
     if (request.method !== "GET") {
@@ -260,5 +703,8 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
+  console.log(
+    `OpenAI configured: ${OPENAI_API_KEY ? "yes" : "no"}; model: ${OPENAI_MODEL}`
+  );
   console.log(`FeedMe Today running at http://${HOST}:${PORT}`);
 });

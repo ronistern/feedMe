@@ -2,15 +2,25 @@ const http = require("node:http");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { Pool } = require("pg");
 
 const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
+const DATABASE_URL = process.env.DATABASE_URL;
 const DATA_FILE = path.join(__dirname, "data", "requests.json");
 const DATA_TEMPLATE = {
   requests: [],
 };
+const pool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: {
+        rejectUnauthorized: false,
+      },
+    })
+  : null;
 
 const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -79,6 +89,7 @@ const FALLBACK_SNOTTY_REMARKS = [
   "Fresh day, same headline. The kitchen noticed.",
 ];
 const recentReplies = [];
+let databaseInitializationPromise = null;
 
 async function ensureDataFile() {
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
@@ -88,6 +99,165 @@ async function ensureDataFile() {
   } catch {
     await fs.writeFile(DATA_FILE, JSON.stringify(DATA_TEMPLATE, null, 2));
   }
+}
+
+async function initializeDatabase() {
+  if (!pool) {
+    return;
+  }
+
+  if (!databaseInitializationPromise) {
+    databaseInitializationPromise = pool.query(`
+      CREATE TABLE IF NOT EXISTS requests (
+        id TEXT PRIMARY KEY,
+        child_name TEXT NOT NULL,
+        name TEXT NOT NULL,
+        meal_type TEXT NOT NULL,
+        reply_source TEXT NOT NULL,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT,
+        reply TEXT NOT NULL,
+        snotty_remark TEXT NOT NULL,
+        repeated_from_yesterday BOOLEAN NOT NULL DEFAULT FALSE,
+        status TEXT NOT NULL DEFAULT 'active',
+        archived_at BIGINT
+      )
+    `);
+  }
+
+  await databaseInitializationPromise;
+}
+
+function mapRowToRequest(row) {
+  return {
+    id: row.id,
+    childName: row.child_name,
+    name: row.name,
+    mealType: row.meal_type,
+    replySource: row.reply_source,
+    createdAt: Number(row.created_at),
+    updatedAt: row.updated_at == null ? null : Number(row.updated_at),
+    reply: row.reply,
+    snottyRemark: row.snotty_remark,
+    repeatedFromYesterday: Boolean(row.repeated_from_yesterday),
+    status: row.status,
+    archivedAt: row.archived_at == null ? null : Number(row.archived_at),
+  };
+}
+
+async function loadRequestRecords() {
+  if (!pool) {
+    const data = await readData();
+    return data.requests.map(sanitizeRequest);
+  }
+
+  await initializeDatabase();
+  const result = await pool.query(
+    `SELECT
+      id,
+      child_name,
+      name,
+      meal_type,
+      reply_source,
+      created_at,
+      updated_at,
+      reply,
+      snotty_remark,
+      repeated_from_yesterday,
+      status,
+      archived_at
+    FROM requests`
+  );
+
+  return result.rows.map(mapRowToRequest).map(sanitizeRequest);
+}
+
+async function insertRequestRecord(record) {
+  if (!pool) {
+    const data = await readData();
+    data.requests.push(record);
+    await writeData(data);
+    return;
+  }
+
+  await initializeDatabase();
+  await pool.query(
+    `INSERT INTO requests (
+      id,
+      child_name,
+      name,
+      meal_type,
+      reply_source,
+      created_at,
+      updated_at,
+      reply,
+      snotty_remark,
+      repeated_from_yesterday,
+      status,
+      archived_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    [
+      record.id,
+      record.childName,
+      record.name,
+      record.mealType,
+      record.replySource,
+      record.createdAt,
+      record.updatedAt,
+      record.reply,
+      record.snottyRemark,
+      record.repeatedFromYesterday,
+      record.status,
+      record.archivedAt,
+    ]
+  );
+}
+
+async function saveUpdatedRequestRecord(record) {
+  if (!pool) {
+    const data = await readData();
+    const index = data.requests.findIndex((entry) => entry.id === record.id);
+    if (index === -1) {
+      return false;
+    }
+
+    data.requests[index] = record;
+    await writeData(data);
+    return true;
+  }
+
+  await initializeDatabase();
+  const result = await pool.query(
+    `UPDATE requests
+    SET child_name = $2,
+        name = $3,
+        meal_type = $4,
+        reply_source = $5,
+        created_at = $6,
+        updated_at = $7,
+        reply = $8,
+        snotty_remark = $9,
+        repeated_from_yesterday = $10,
+        status = $11,
+        archived_at = $12
+    WHERE id = $1`,
+    [
+      record.id,
+      record.childName,
+      record.name,
+      record.mealType,
+      record.replySource,
+      record.createdAt,
+      record.updatedAt,
+      record.reply,
+      record.snottyRemark,
+      record.repeatedFromYesterday,
+      record.status,
+      record.archivedAt,
+    ]
+  );
+
+  return result.rowCount > 0;
 }
 
 async function readData() {
@@ -216,8 +386,8 @@ function summarizeRequests(requests) {
 }
 
 async function listRequests() {
-  const data = await readData();
-  return summarizeRequests(data.requests);
+  const requests = await loadRequestRecords();
+  return summarizeRequests(requests);
 }
 
 async function createSnottyRemark(food) {
@@ -332,8 +502,8 @@ async function createRequestRecord({ childName, food, mealType }) {
     archivedAt: null,
   };
 
-  const data = await readData();
-  const requestResponse = await buildRequestResponse(data.requests, {
+  const requests = await loadRequestRecords();
+  const requestResponse = await buildRequestResponse(requests, {
     childName: trimmedChildName,
     food: name,
   });
@@ -342,8 +512,7 @@ async function createRequestRecord({ childName, food, mealType }) {
   requestRecord.replySource = requestResponse.replySource;
   requestRecord.snottyRemark = requestResponse.snottyRemark;
   requestRecord.repeatedFromYesterday = requestResponse.repeatedFromYesterday;
-  data.requests.push(requestRecord);
-  await writeData(data);
+  await insertRequestRecord(requestRecord);
 
   return sanitizeRequest(requestRecord);
 }
@@ -357,8 +526,8 @@ async function updateRequestRecord(requestId, { childName, food, mealType }) {
     return { error: "Child name and food are required.", statusCode: 400 };
   }
 
-  const data = await readData();
-  const request = data.requests.find((entry) => entry.id === requestId);
+  const requests = await loadRequestRecords();
+  const request = requests.find((entry) => entry.id === requestId);
 
   if (!request) {
     return { error: "Request not found.", statusCode: 404 };
@@ -368,7 +537,7 @@ async function updateRequestRecord(requestId, { childName, food, mealType }) {
     return { error: "Only today's active requests for this child can be edited.", statusCode: 403 };
   }
 
-  const requestResponse = await buildRequestResponse(data.requests, {
+  const requestResponse = await buildRequestResponse(requests, {
     childName: trimmedChildName,
     food: name,
     excludedRequestId: requestId,
@@ -381,14 +550,14 @@ async function updateRequestRecord(requestId, { childName, food, mealType }) {
   request.replySource = requestResponse.replySource;
   request.snottyRemark = requestResponse.snottyRemark;
   request.repeatedFromYesterday = requestResponse.repeatedFromYesterday;
-  await writeData(data);
+  await saveUpdatedRequestRecord(request);
 
   return { request: sanitizeRequest(request), statusCode: 200 };
 }
 
 async function archiveRequestById(requestId) {
-  const data = await readData();
-  const request = data.requests.find((entry) => entry.id === requestId && entry.status !== "archived");
+  const requests = await loadRequestRecords();
+  const request = requests.find((entry) => entry.id === requestId && entry.status !== "archived");
 
   if (!request) {
     return false;
@@ -396,24 +565,21 @@ async function archiveRequestById(requestId) {
 
   request.status = "archived";
   request.archivedAt = Date.now();
-  await writeData(data);
-  return true;
+  return saveUpdatedRequestRecord(request);
 }
 
 async function archiveAllActiveRequests() {
-  const data = await readData();
+  const requests = await loadRequestRecords();
   let changed = false;
 
-  data.requests.forEach((request) => {
+  for (const request of requests) {
     if (request.status !== "archived") {
       request.status = "archived";
       request.archivedAt = Date.now();
+      request.updatedAt = Date.now();
+      await saveUpdatedRequestRecord(request);
       changed = true;
     }
-  });
-
-  if (changed) {
-    await writeData(data);
   }
 
   return changed;
@@ -702,9 +868,21 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(
-    `OpenAI configured: ${OPENAI_API_KEY ? "yes" : "no"}; model: ${OPENAI_MODEL}`
-  );
-  console.log(`FeedMe Today running at http://${HOST}:${PORT}`);
-});
+async function startServer() {
+  try {
+    await initializeDatabase();
+    server.listen(PORT, HOST, () => {
+      console.log(
+        `OpenAI configured: ${OPENAI_API_KEY ? "yes" : "no"}; model: ${OPENAI_MODEL}; persistence: ${
+          pool ? "postgres" : "local-json"
+        }`
+      );
+      console.log(`FeedMe Today running at http://${HOST}:${PORT}`);
+    });
+  } catch (error) {
+    console.error("Failed to initialize persistence layer:", error);
+    process.exit(1);
+  }
+}
+
+startServer();

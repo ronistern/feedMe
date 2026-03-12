@@ -6,6 +6,7 @@ Funny family meal board for kids and parents.
 
 ```powershell
 $env:OPENAI_API_KEY="your_key_here"
+$env:DATABASE_URL="postgresql://..."
 node server.js
 ```
 
@@ -19,6 +20,7 @@ This repo includes a `render.yaml` Blueprint config for a free Node web service.
 
 Required environment variable:
 
+- `DATABASE_URL` for Neon/Postgres persistence
 - `OPENAI_API_KEY`
 
 Optional environment variable:
@@ -33,4 +35,5 @@ Optional local asset:
 ## Notes
 
 - Render free web services may spin down after idle time, so the first request can be slow.
+- The app stores requests in Postgres when `DATABASE_URL` is set. Without it, local development falls back to `data/requests.json`.
 - Do not commit secrets such as `.env` files or API keys.

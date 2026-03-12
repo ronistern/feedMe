@@ -6,6 +6,8 @@ services:
     buildCommand: npm install
     startCommand: node server.js
     envVars:
+      - key: DATABASE_URL
+        sync: false
       - key: OPENAI_MODEL
         value: gpt-5
       - key: OPENAI_API_KEY

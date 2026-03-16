@@ -39,6 +39,14 @@ function toggleEmptyState(element, isEmpty) {
   element.classList.toggle("is-hidden", !isEmpty);
 }
 
+function formatRequestLabel(request) {
+  if (request.requestType === "ride") {
+    return `Ride ${request.rideTime}: ${request.rideFrom} to ${request.rideTo} (${request.name})`;
+  }
+
+  return `${request.mealType === "dinner" ? "Dinner" : "Lunch"}: ${request.name}`;
+}
+
 function renderBars(container, emptyNode, entries, formatter) {
   container.innerHTML = "";
   const isEmpty = !entries.length;
@@ -94,7 +102,7 @@ function renderHistory(requests) {
     childCell.textContent = request.childName;
 
     const foodCell = document.createElement("td");
-    foodCell.textContent = request.name;
+    foodCell.textContent = formatRequestLabel(request);
 
     const statusCell = document.createElement("td");
     statusCell.textContent = request.status === "archived" ? "Archived" : "Active";

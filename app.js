@@ -7,14 +7,27 @@ const defaultState = {
     dinner: "",
     dinnerNote: "",
   },
+  rideSuggestions: {
+    purpose: [],
+    from: [],
+    to: [],
+  },
   requests: [],
 };
 
 const roleTabs = document.querySelectorAll("[data-view-target]");
 const viewPanels = document.querySelectorAll("[data-view-panel]");
 const requestForm = document.getElementById("request-form");
+const rideRequestForm = document.getElementById("ride-request-form");
 const plannerForm = document.getElementById("planner-form");
 const requestInput = document.getElementById("request-input");
+const rideTimeInput = document.getElementById("ride-time-input");
+const rideFromInput = document.getElementById("ride-from-input");
+const rideToInput = document.getElementById("ride-to-input");
+const ridePurposeInput = document.getElementById("ride-purpose-input");
+const ridePurposeOptions = document.getElementById("ride-purpose-options");
+const rideFromOptions = document.getElementById("ride-from-options");
+const rideToOptions = document.getElementById("ride-to-options");
 const mealTypeInputs = document.querySelectorAll('input[name="mealType"]');
 const requestList = document.getElementById("request-list");
 const emptyRequests = document.getElementById("empty-requests");
@@ -22,10 +35,13 @@ const requestStatus = document.getElementById("request-status");
 const clearRequestsButton = document.getElementById("clear-requests");
 const analysisLink = document.getElementById("analysis-link");
 const requestSubmitButton = document.getElementById("request-submit-button");
+const rideSubmitButton = document.getElementById("ride-submit-button");
 const cancelRequestEditButton = document.getElementById("cancel-request-edit");
 const kidRequestList = document.getElementById("kid-request-list");
 const emptyKidRequests = document.getElementById("empty-kid-requests");
 const suggestionButtons = document.querySelectorAll("[data-suggestion]");
+const foodRequestPanel = document.getElementById("food-request-panel");
+const rideRequestPanel = document.getElementById("ride-request-panel");
 const replyOutput = document.getElementById("reply-output");
 const replyTitle = document.getElementById("reply-title");
 const thinkingIndicator = document.getElementById("thinking-indicator");
@@ -71,6 +87,7 @@ const PROFILES = {
   kids: ["Ofer", "Amit", "Nitzan"],
   parent: ["Adi", "Roni"],
 };
+const RIDE_SUGGESTION_LIMIT = 12;
 
 let state = loadState();
 let availableVoices = [];
@@ -218,6 +235,10 @@ function loadState() {
         ...defaultState.menu,
         ...parsed.menu,
       },
+      rideSuggestions: {
+        ...defaultState.rideSuggestions,
+        ...parsed.rideSuggestions,
+      },
     };
   } catch {
     return structuredClone(defaultState);
@@ -229,8 +250,45 @@ function saveState() {
     STORAGE_KEY,
     JSON.stringify({
       menu: state.menu,
+      rideSuggestions: state.rideSuggestions,
     })
   );
+}
+
+function normalizeSuggestionValue(value, maxLength = 80) {
+  return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function saveRideSuggestion(type, value, maxLength = 80) {
+  const normalized = normalizeSuggestionValue(value, maxLength);
+  if (!normalized) {
+    return;
+  }
+
+  const current = Array.isArray(state.rideSuggestions[type]) ? state.rideSuggestions[type] : [];
+  state.rideSuggestions[type] = [
+    normalized,
+    ...current.filter((entry) => entry.toLowerCase() !== normalized.toLowerCase()),
+  ].slice(0, RIDE_SUGGESTION_LIMIT);
+}
+
+function renderDatalist(element, values) {
+  if (!element) {
+    return;
+  }
+
+  element.innerHTML = "";
+  values.forEach((value) => {
+    const option = document.createElement("option");
+    option.value = value;
+    element.append(option);
+  });
+}
+
+function renderRideSuggestions() {
+  renderDatalist(ridePurposeOptions, state.rideSuggestions.purpose || []);
+  renderDatalist(rideFromOptions, state.rideSuggestions.from || []);
+  renderDatalist(rideToOptions, state.rideSuggestions.to || []);
 }
 
 function loadProfile() {
@@ -324,20 +382,35 @@ function isToday(timestamp) {
 function resetRequestEditing() {
   editingRequestId = null;
   requestForm.reset();
+  rideRequestForm.reset();
   setSelectedMealType("lunch");
   requestSubmitButton.textContent = "Send";
+  rideSubmitButton.textContent = "Send";
   cancelRequestEditButton.classList.add("is-hidden");
 }
 
 function startRequestEditing(request) {
   editingRequestId = request.id;
-  requestInput.value = request.name;
-  setSelectedMealType(request.mealType || "lunch");
-  requestSubmitButton.textContent = "Save";
+  if (request.requestType === "ride") {
+    rideTimeInput.value = request.rideTime || "";
+    rideFromInput.value = request.rideFrom || "";
+    rideToInput.value = request.rideTo || "";
+    ridePurposeInput.value = request.name || "";
+    rideSubmitButton.textContent = "Save";
+    foodRequestPanel.open = false;
+    rideRequestPanel.open = true;
+    rideTimeInput.focus();
+  } else {
+    requestInput.value = request.name;
+    setSelectedMealType(request.mealType || "lunch");
+    requestSubmitButton.textContent = "Save";
+    rideRequestPanel.open = false;
+    foodRequestPanel.open = true;
+    requestInput.focus();
+    requestInput.select();
+  }
   cancelRequestEditButton.classList.remove("is-hidden");
-  requestStatus.textContent = `Editing ${request.name}.`;
-  requestInput.focus();
-  requestInput.select();
+  requestStatus.textContent = `Editing ${formatRequestHeadline(request)}.`;
 }
 
 function renderRequestReply(container, request) {
@@ -358,6 +431,30 @@ function formatMealType(mealType) {
   return mealType === "dinner" ? "Dinner" : "Lunch";
 }
 
+function formatRequestHeadline(request) {
+  if (request.requestType === "ride") {
+    return `ride for ${request.name}`;
+  }
+
+  return `${formatMealType(request.mealType)}: ${request.name}`;
+}
+
+function formatRequestDetails(request) {
+  if (request.requestType === "ride") {
+    return `Ride at ${request.rideTime} from ${request.rideFrom} to ${request.rideTo}`;
+  }
+
+  return `${formatMealType(request.mealType)}: ${request.name}`;
+}
+
+function formatRequestSubdetails(request) {
+  if (request.requestType === "ride") {
+    return `Purpose: ${request.name}`;
+  }
+
+  return "";
+}
+
 function getCurrentKidRequests() {
   if (!activeProfile || activeProfile.role !== "kids") {
     return [];
@@ -373,6 +470,9 @@ function renderKidRequests() {
 
   const kidRequests = getCurrentKidRequests();
   if (!kidRequests.length) {
+    if (editingRequestId) {
+      resetRequestEditing();
+    }
     emptyKidRequests.classList.remove("is-hidden");
     return;
   }
@@ -387,7 +487,17 @@ function renderKidRequests() {
 
     const name = document.createElement("p");
     name.className = "request-name";
-    name.textContent = `${formatMealType(request.mealType)}: ${request.name}`;
+    name.textContent = formatRequestDetails(request);
+
+    const subdetails = formatRequestSubdetails(request);
+    if (subdetails) {
+      const meta = document.createElement("p");
+      meta.className = "request-meta";
+      meta.textContent = subdetails;
+      content.append(name, meta);
+    } else {
+      content.append(name);
+    }
 
     const time = document.createElement("p");
     time.className = "request-time";
@@ -395,7 +505,7 @@ function renderKidRequests() {
       ? `Updated at ${formatTime(request.updatedAt)}`
       : `Sent at ${formatTime(request.createdAt)}`;
 
-    content.append(name, time);
+    content.append(time);
 
     const actions = document.createElement("div");
     actions.className = "request-actions";
@@ -449,11 +559,19 @@ function renderRequests() {
 
       const name = document.createElement("p");
       name.className = "request-name";
-      name.textContent = `${formatMealType(request.mealType)}: ${request.name}`;
+      name.textContent = formatRequestDetails(request);
 
       const child = document.createElement("p");
       child.className = "request-child";
       child.textContent = request.childName;
+
+      const subdetails = formatRequestSubdetails(request);
+      const meta = subdetails
+        ? Object.assign(document.createElement("p"), {
+            className: "request-meta",
+            textContent: subdetails,
+          })
+        : null;
 
       const time = document.createElement("p");
       time.className = "request-time";
@@ -470,7 +588,11 @@ function renderRequests() {
         await archiveRequest(request.id);
       });
 
-      content.append(child, name, time);
+      content.append(child, name);
+      if (meta) {
+        content.append(meta);
+      }
+      content.append(time);
       renderRequestReply(content, request);
       item.append(content, removeButton);
       requestList.append(item);
@@ -510,18 +632,31 @@ async function archiveRequest(requestId) {
   }
 }
 
-async function saveRequest(food, mealType) {
+async function saveRequest(payload) {
+  const body =
+    payload.requestType === "ride"
+      ? {
+          childName: activeProfile?.name || "",
+          requestType: "ride",
+          rideTime: payload.rideTime,
+          rideFrom: payload.rideFrom,
+          rideTo: payload.rideTo,
+          purpose: payload.purpose,
+        }
+      : {
+          childName: activeProfile?.name || "",
+          food: payload.food,
+          mealType: payload.mealType,
+          requestType: "food",
+        };
+
   if (editingRequestId) {
     const result = await fetchJson(`/api/requests/${editingRequestId}/update`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        childName: activeProfile?.name || "",
-        food,
-        mealType,
-      }),
+      body: JSON.stringify(body),
     });
 
     state.requests = state.requests.map((request) =>
@@ -535,11 +670,7 @@ async function saveRequest(food, mealType) {
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      childName: activeProfile?.name || "",
-      food,
-      mealType,
-    }),
+    body: JSON.stringify(body),
   });
 
   state.requests.unshift(result.request);
@@ -795,7 +926,11 @@ function getClientFallbackReply(food, childName) {
   return `${childName}, you want ${food}? ${clientFallbackReplies[index]}`;
 }
 
-async function submitRequest(rawValue) {
+function getClientRideFallbackReply({ time, from, to, purpose }, childName) {
+  return `${childName}, ride noted for ${time} from ${from} to ${to} for ${purpose}.`;
+}
+
+async function submitFoodRequest(rawValue) {
   const name = rawValue.trim();
   const childName = activeProfile?.name || "";
   const mealType = getSelectedMealType();
@@ -820,7 +955,11 @@ async function submitRequest(rawValue) {
   updateReplyCard("", "");
 
   try {
-    const request = await saveRequest(name, mealType);
+    const request = await saveRequest({
+      requestType: "food",
+      food: name,
+      mealType,
+    });
     const chefMessage = request.snottyRemark
       ? `${request.reply} ${request.snottyRemark}`
       : request.reply;
@@ -844,6 +983,76 @@ async function submitRequest(rawValue) {
       },
     });
     requestStatus.textContent = "Could not save that request to the server.";
+  }
+}
+
+async function submitRideRequest({ rideTime, rideFrom, rideTo, purpose }) {
+  const childName = activeProfile?.name || "";
+  const normalizedRideTime = rideTime.trim();
+  const normalizedRideFrom = rideFrom.trim();
+  const normalizedRideTo = rideTo.trim();
+  const normalizedPurpose = purpose.trim();
+
+  if (!activeProfile || activeProfile.role !== "kids") {
+    requestStatus.textContent = "Please enter as a kid before sending a ride request.";
+    return;
+  }
+
+  if (!normalizedRideTime || !normalizedRideFrom || !normalizedRideTo || !normalizedPurpose) {
+    requestStatus.textContent = "Please fill in the time, from, to, and purpose.";
+    return;
+  }
+
+  rideRequestForm.reset();
+  requestStatus.textContent = editingRequestId
+    ? `Saving ride request for ${normalizedPurpose}...`
+    : `${childName} asked for a ride at ${normalizedRideTime}.`;
+  setReplyThinking(true);
+  updateReplyCard("", "");
+
+  try {
+    const request = await saveRequest({
+      requestType: "ride",
+      rideTime: normalizedRideTime,
+      rideFrom: normalizedRideFrom,
+      rideTo: normalizedRideTo,
+      purpose: normalizedPurpose,
+    });
+    saveRideSuggestion("purpose", normalizedPurpose, 60);
+    saveRideSuggestion("from", normalizedRideFrom, 80);
+    saveRideSuggestion("to", normalizedRideTo, 80);
+    saveState();
+    renderRideSuggestions();
+    const chefMessage = request.reply;
+    renderRequests();
+    requestStatus.textContent = editingRequestId
+      ? `Ride request updated for ${normalizedPurpose}.`
+      : `${childName} asked for a ride at ${normalizedRideTime}.`;
+    resetRequestEditing();
+    rideTimeInput.focus();
+    await speakReply(chefMessage, {
+      onStart: () => {
+        setReplyThinking(false);
+        scheduleReplyReveal("Chef Bot says", chefMessage, request.replySource || "fallback");
+      },
+    });
+  } catch {
+    const fallbackReply = getClientRideFallbackReply(
+      {
+        time: normalizedRideTime,
+        from: normalizedRideFrom,
+        to: normalizedRideTo,
+        purpose: normalizedPurpose,
+      },
+      childName
+    );
+    setReplyThinking(false);
+    await speakReply(fallbackReply, {
+      onStart: () => {
+        scheduleReplyReveal("Chef Bot dropped the spoon", fallbackReply, "fallback");
+      },
+    });
+    requestStatus.textContent = "Could not save that ride request to the server.";
   }
 }
 
@@ -883,14 +1092,26 @@ suggestionButtons.forEach((button) => {
   button.addEventListener("click", () => {
     primeSpeech();
     requestInput.value = button.dataset.suggestion;
-    void submitRequest(button.dataset.suggestion || "");
+    foodRequestPanel.open = true;
+    void submitFoodRequest(button.dataset.suggestion || "");
   });
 });
 
 requestForm.addEventListener("submit", (event) => {
   event.preventDefault();
   primeSpeech();
-  void submitRequest(requestInput.value);
+  void submitFoodRequest(requestInput.value);
+});
+
+rideRequestForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  primeSpeech();
+  void submitRideRequest({
+    rideTime: rideTimeInput.value,
+    rideFrom: rideFromInput.value,
+    rideTo: rideToInput.value,
+    purpose: ridePurposeInput.value,
+  });
 });
 
 cancelRequestEditButton.addEventListener("click", () => {
@@ -983,6 +1204,7 @@ if ("speechSynthesis" in window) {
 }
 
 updateMealDisplays();
+renderRideSuggestions();
 void refreshRequests();
 applyProfile(activeProfile);
 setSelectedMealType("lunch");

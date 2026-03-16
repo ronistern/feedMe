@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FeedMe Today</title>
+    <title>I want ...</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -49,7 +49,7 @@
         </div>
 
         <button class="primary-button wide-button" id="profile-submit" type="button">
-          Enter FeedMe Today
+          Enter I want ...
         </button>
         <p class="status-message" id="profile-status" role="status" aria-live="polite"></p>
       </section>
@@ -59,11 +59,11 @@
       <section class="hero">
         <div class="hero-top">
           <div class="hero-copy-block">
-            <p class="eyebrow">Family food board</p>
-            <h1>FeedMe Today</h1>
+            <p class="eyebrow">Family request board</p>
+            <h1>I want ...</h1>
             <p class="hero-copy">
-              Kids can ask for the food they want, and parents can share what is on
-              the menu for lunch and dinner.
+              Kids can ask for food or a pickup ride, and parents can track what is
+              needed today.
             </p>
           </div>
 
@@ -135,63 +135,128 @@
         >
           <div class="card-header">
             <p class="card-kicker">Kids corner</p>
-            <h2 id="kids-title">Send a food request</h2>
           </div>
 
-          <p class="section-copy">
-            Pick one of the ideas below or write your own. Every request will
-            show up for the parent.
-          </p>
-
-          <div class="suggestion-grid" aria-label="Suggested food requests">
-            <button class="suggestion-chip" type="button" data-suggestion="Pasta">
-              Pasta
-            </button>
-            <button class="suggestion-chip" type="button" data-suggestion="Pizza">
-              Pizza
-            </button>
-            <button class="suggestion-chip" type="button" data-suggestion="Rice">
-              Rice
-            </button>
-            <button class="suggestion-chip" type="button" data-suggestion="Sandwich">
-              Sandwich
-            </button>
-            <button class="suggestion-chip" type="button" data-suggestion="Salad">
-              Salad
-            </button>
-          </div>
-
-          <form class="request-form" id="request-form">
-            <div class="meal-choice-group">
-              <p class="input-label">Meal</p>
-              <div class="meal-choice-grid" role="radiogroup" aria-label="Choose meal">
-                <label class="name-option">
-                  <input type="radio" name="mealType" value="lunch" checked />
-                  <span>Lunch</span>
-                </label>
-                <label class="name-option">
-                  <input type="radio" name="mealType" value="dinner" />
-                  <span>Dinner</span>
-                </label>
+          <details class="request-accordion" id="food-request-panel">
+            <summary>Send food requests</summary>
+            <div class="request-panel">
+              <div class="suggestion-grid" aria-label="Suggested food requests">
+                <button class="suggestion-chip" type="button" data-suggestion="Pasta">
+                  Pasta
+                </button>
+                <button class="suggestion-chip" type="button" data-suggestion="Pizza">
+                  Pizza
+                </button>
+                <button class="suggestion-chip" type="button" data-suggestion="Rice">
+                  Rice
+                </button>
+                <button class="suggestion-chip" type="button" data-suggestion="Sandwich">
+                  Sandwich
+                </button>
+                <button class="suggestion-chip" type="button" data-suggestion="Salad">
+                  Salad
+                </button>
               </div>
-            </div>
 
-            <label class="input-label" for="request-input">My food idea</label>
-            <div class="input-row">
-              <input
-                id="request-input"
-                name="request"
-                type="text"
-                maxlength="60"
-                placeholder="Type what you want to eat"
-                autocomplete="off"
-                required
-              />
-              <button class="primary-button" id="request-submit-button" type="submit">
-                Send
-              </button>
+              <form class="request-form" id="request-form">
+                <div class="meal-choice-group">
+                  <p class="input-label">Meal</p>
+                  <div class="meal-choice-grid" role="radiogroup" aria-label="Choose meal">
+                    <label class="name-option">
+                      <input type="radio" name="mealType" value="lunch" checked />
+                      <span>Lunch</span>
+                    </label>
+                    <label class="name-option">
+                      <input type="radio" name="mealType" value="dinner" />
+                      <span>Dinner</span>
+                    </label>
+                  </div>
+                </div>
+
+                <label class="input-label" for="request-input">My food idea</label>
+                <div class="input-row">
+                  <input
+                    id="request-input"
+                    name="request"
+                    type="text"
+                    maxlength="60"
+                    placeholder="Type what you want to eat"
+                    autocomplete="off"
+                    required
+                  />
+                  <button class="primary-button" id="request-submit-button" type="submit">
+                    Send
+                  </button>
+                </div>
+              </form>
             </div>
-          </form>
+          </details>
+
+          <details class="request-accordion" id="ride-request-panel">
+            <summary>Send ride requests</summary>
+            <div class="request-panel">
+              <form class="request-form" id="ride-request-form">
+                <div class="ride-form-grid">
+                  <div>
+                    <label class="input-label" for="ride-time-input">Time</label>
+                    <input
+                      id="ride-time-input"
+                      name="rideTime"
+                      type="time"
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <label class="input-label" for="ride-purpose-input">Purpose</label>
+                    <input
+                      id="ride-purpose-input"
+                      name="ridePurpose"
+                      type="text"
+                      maxlength="60"
+                      placeholder="School pickup, soccer, piano..."
+                      autocomplete="off"
+                      list="ride-purpose-options"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <label class="input-label" for="ride-from-input">From</label>
+                <input
+                  id="ride-from-input"
+                  name="rideFrom"
+                  type="text"
+                  maxlength="80"
+                  placeholder="Where are you being picked up?"
+                  autocomplete="off"
+                  list="ride-from-options"
+                  required
+                />
+
+                <label class="input-label" for="ride-to-input">To</label>
+                <div class="input-row">
+                  <input
+                    id="ride-to-input"
+                    name="rideTo"
+                    type="text"
+                    maxlength="80"
+                    placeholder="Where do you need to go?"
+                    autocomplete="off"
+                    list="ride-to-options"
+                    required
+                  />
+                  <button class="primary-button" id="ride-submit-button" type="submit">
+                    Send
+                  </button>
+                </div>
+
+                <datalist id="ride-purpose-options"></datalist>
+                <datalist id="ride-from-options"></datalist>
+                <datalist id="ride-to-options"></datalist>
+              </form>
+            </div>
+          </details>
 
           <p class="status-message" id="request-status" role="status" aria-live="polite"></p>
 
@@ -346,7 +411,7 @@
         >
           <div class="card-header">
             <p class="card-kicker">Parent desk</p>
-            <h2 id="parent-title">Plan today&apos;s meals</h2>
+            <h2 id="parent-title">Plan today&apos;s meals and review requests</h2>
           </div>
 
           <a class="secondary-button analysis-link" id="analysis-link" href="/analysis.html">

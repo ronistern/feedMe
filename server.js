@@ -8,10 +8,12 @@ const HOST = process.env.HOST || "0.0.0.0";
 const PORT = Number(process.env.PORT || 3000);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
+const OPENAI_COOLDOWN_MS = Number(process.env.OPENAI_COOLDOWN_MS || 5 * 60 * 1000);
 const DATABASE_URL = process.env.DATABASE_URL;
 const DATA_FILE = path.join(__dirname, "data", "requests.json");
 const DATA_TEMPLATE = {
   requests: [],
+  fallbackResponses: [],
 };
 const pool = DATABASE_URL
   ? new Pool({
@@ -56,6 +58,7 @@ const FALLBACK_CLOSERS = [
   "The chef has marked that down under brave decisions.",
 ];
 const RECENT_REPLY_LIMIT = 10;
+const FALLBACK_RESPONSE_LIMIT = 200;
 const STYLE_HINTS = [
   "Say it like a dramatic TV chef.",
   "Say it like a playful soccer commentator.",
@@ -88,8 +91,86 @@ const FALLBACK_SNOTTY_REMARKS = [
   "This meal request has officially entered its repeat era.",
   "Fresh day, same headline. The kitchen noticed.",
 ];
+const RIDE_REPLY_TEMPLATES = [
+  "Ride request noted: {purpose} from {from} to {to} at {time}. The chauffeur calendar just raised an eyebrow.",
+  "Pickup mission accepted for {time}: {from} to {to} for {purpose}. The family taxi will review the route.",
+  "Request received for a {time} ride from {from} to {to} for {purpose}. The back seat is considering terms.",
+  "Transportation alert: {purpose}, {from} to {to}, leaving at {time}. The ride desk has it on the board.",
+  "Your ride request for {purpose} at {time} from {from} to {to} is in. The driver may request snacks as payment.",
+];
 const recentReplies = [];
 let databaseInitializationPromise = null;
+let openAICooldownUntil = 0;
+
+function normalizeRequestType(requestType) {
+  return requestType === "ride" ? "ride" : "food";
+}
+
+function normalizeMealType(mealType, requestType = "food") {
+  if (normalizeRequestType(requestType) === "ride") {
+    return "ride";
+  }
+
+  return mealType === "dinner" ? "dinner" : "lunch";
+}
+
+function cleanRideField(value, maxLength = 80) {
+  return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function extractOpenAIErrorMessage(errorText) {
+  const trimmed = String(errorText || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    const message = parsed && parsed.error && typeof parsed.error.message === "string" ? parsed.error.message : "";
+    return message.trim() || trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function requestOpenAIResponse(input) {
+  if (!OPENAI_API_KEY) {
+    return null;
+  }
+
+  if (openAICooldownUntil > Date.now()) {
+    throw new Error("OpenAI temporarily disabled after a recent 429.");
+  }
+
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      input,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = extractOpenAIErrorMessage(await response.text());
+
+    if (response.status === 429) {
+      openAICooldownUntil = Date.now() + OPENAI_COOLDOWN_MS;
+    }
+
+    throw new Error(`OpenAI request failed: ${response.status}${errorText ? ` ${errorText}` : ""}`);
+  }
+
+  openAICooldownUntil = 0;
+  return response.json();
+}
 
 async function ensureDataFile() {
   await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
@@ -107,22 +188,45 @@ async function initializeDatabase() {
   }
 
   if (!databaseInitializationPromise) {
-    databaseInitializationPromise = pool.query(`
-      CREATE TABLE IF NOT EXISTS requests (
-        id TEXT PRIMARY KEY,
-        child_name TEXT NOT NULL,
-        name TEXT NOT NULL,
-        meal_type TEXT NOT NULL,
-        reply_source TEXT NOT NULL,
-        created_at BIGINT NOT NULL,
-        updated_at BIGINT,
-        reply TEXT NOT NULL,
-        snotty_remark TEXT NOT NULL,
-        repeated_from_yesterday BOOLEAN NOT NULL DEFAULT FALSE,
-        status TEXT NOT NULL DEFAULT 'active',
-        archived_at BIGINT
-      )
-    `);
+    databaseInitializationPromise = (async () => {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS requests (
+          id TEXT PRIMARY KEY,
+          child_name TEXT NOT NULL,
+          name TEXT NOT NULL,
+          meal_type TEXT NOT NULL,
+          request_type TEXT NOT NULL DEFAULT 'food',
+          ride_time TEXT NOT NULL DEFAULT '',
+          ride_from TEXT NOT NULL DEFAULT '',
+          ride_to TEXT NOT NULL DEFAULT '',
+          reply_source TEXT NOT NULL,
+          created_at BIGINT NOT NULL,
+          updated_at BIGINT,
+          reply TEXT NOT NULL,
+          snotty_remark TEXT NOT NULL,
+          repeated_from_yesterday BOOLEAN NOT NULL DEFAULT FALSE,
+          status TEXT NOT NULL DEFAULT 'active',
+          archived_at BIGINT
+        )
+      `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS fallback_responses (
+          id TEXT PRIMARY KEY,
+          request_type TEXT NOT NULL,
+          context_key TEXT NOT NULL,
+          reply TEXT NOT NULL,
+          template TEXT NOT NULL DEFAULT '',
+          created_at BIGINT NOT NULL
+        )
+      `);
+
+      await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS request_type TEXT NOT NULL DEFAULT 'food'`);
+      await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS ride_time TEXT NOT NULL DEFAULT ''`);
+      await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS ride_from TEXT NOT NULL DEFAULT ''`);
+      await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS ride_to TEXT NOT NULL DEFAULT ''`);
+      await pool.query(`ALTER TABLE fallback_responses ADD COLUMN IF NOT EXISTS template TEXT NOT NULL DEFAULT ''`);
+    })();
   }
 
   await databaseInitializationPromise;
@@ -133,7 +237,11 @@ function mapRowToRequest(row) {
     id: row.id,
     childName: row.child_name,
     name: row.name,
+    requestType: row.request_type,
     mealType: row.meal_type,
+    rideTime: row.ride_time,
+    rideFrom: row.ride_from,
+    rideTo: row.ride_to,
     replySource: row.reply_source,
     createdAt: Number(row.created_at),
     updatedAt: row.updated_at == null ? null : Number(row.updated_at),
@@ -158,6 +266,10 @@ async function loadRequestRecords() {
       child_name,
       name,
       meal_type,
+      request_type,
+      ride_time,
+      ride_from,
+      ride_to,
       reply_source,
       created_at,
       updated_at,
@@ -187,6 +299,10 @@ async function insertRequestRecord(record) {
       child_name,
       name,
       meal_type,
+      request_type,
+      ride_time,
+      ride_from,
+      ride_to,
       reply_source,
       created_at,
       updated_at,
@@ -195,12 +311,16 @@ async function insertRequestRecord(record) {
       repeated_from_yesterday,
       status,
       archived_at
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
     [
       record.id,
       record.childName,
       record.name,
       record.mealType,
+      record.requestType,
+      record.rideTime,
+      record.rideFrom,
+      record.rideTo,
       record.replySource,
       record.createdAt,
       record.updatedAt,
@@ -232,20 +352,28 @@ async function saveUpdatedRequestRecord(record) {
     SET child_name = $2,
         name = $3,
         meal_type = $4,
-        reply_source = $5,
-        created_at = $6,
-        updated_at = $7,
-        reply = $8,
-        snotty_remark = $9,
-        repeated_from_yesterday = $10,
-        status = $11,
-        archived_at = $12
+        request_type = $5,
+        ride_time = $6,
+        ride_from = $7,
+        ride_to = $8,
+        reply_source = $9,
+        created_at = $10,
+        updated_at = $11,
+        reply = $12,
+        snotty_remark = $13,
+        repeated_from_yesterday = $14,
+        status = $15,
+        archived_at = $16
     WHERE id = $1`,
     [
       record.id,
       record.childName,
       record.name,
       record.mealType,
+      record.requestType,
+      record.rideTime,
+      record.rideFrom,
+      record.rideTo,
       record.replySource,
       record.createdAt,
       record.updatedAt,
@@ -268,6 +396,7 @@ async function readData() {
     const parsed = JSON.parse(raw);
     return {
       requests: Array.isArray(parsed.requests) ? parsed.requests : [],
+      fallbackResponses: Array.isArray(parsed.fallbackResponses) ? parsed.fallbackResponses : [],
     };
   } catch {
     return structuredClone(DATA_TEMPLATE);
@@ -280,11 +409,17 @@ async function writeData(data) {
 }
 
 function sanitizeRequest(record) {
+  const requestType = normalizeRequestType(record.requestType);
+
   return {
     id: String(record.id || ""),
     childName: String(record.childName || "").trim().slice(0, 40),
     name: String(record.name || "").trim().slice(0, 60),
-    mealType: record.mealType === "dinner" ? "dinner" : "lunch",
+    requestType,
+    mealType: normalizeMealType(record.mealType, requestType),
+    rideTime: requestType === "ride" ? cleanRideField(record.rideTime, 20) : "",
+    rideFrom: requestType === "ride" ? cleanRideField(record.rideFrom, 80) : "",
+    rideTo: requestType === "ride" ? cleanRideField(record.rideTo, 80) : "",
     replySource: record.replySource === "openai" ? "openai" : "fallback",
     createdAt: Number(record.createdAt || Date.now()),
     updatedAt: record.updatedAt ? Number(record.updatedAt) : null,
@@ -301,6 +436,168 @@ function normalizeFoodName(food) {
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
+
+function normalizeFallbackResponse(entry) {
+  const requestType = normalizeRequestType(entry.requestType);
+  const reply = String(entry.reply || "").trim().slice(0, 240);
+  const template = String(entry.template || "").trim().slice(0, 240);
+
+  return {
+    id: String(entry.id || ""),
+    requestType,
+    contextKey: String(entry.contextKey || "").trim().slice(0, 240),
+    reply,
+    template,
+    createdAt: Number(entry.createdAt || Date.now()),
+  };
+}
+
+function buildFoodContextKey(food) {
+  return `food:${normalizeFoodName(food)}`;
+}
+
+function buildRideContextKey({ time, from, to, purpose }) {
+  return `ride:${normalizeFoodName(time)}|${normalizeFoodName(from)}|${normalizeFoodName(to)}|${normalizeFoodName(
+    purpose
+  )}`;
+}
+
+function createFoodFallbackTemplate(reply, food) {
+  const trimmedReply = String(reply || "").trim();
+  const trimmedFood = String(food || "").trim();
+  if (!trimmedReply || !trimmedFood) {
+    return "";
+  }
+
+  const pattern = new RegExp(escapeRegExp(trimmedFood), "gi");
+  if (!pattern.test(trimmedReply)) {
+    return "";
+  }
+
+  return trimmedReply.replace(pattern, "{food}");
+}
+
+function createRideFallbackTemplate(reply, { time, from, to, purpose }) {
+  let template = String(reply || "").trim();
+  const replacements = [
+    ["{time}", time],
+    ["{from}", from],
+    ["{to}", to],
+    ["{purpose}", purpose],
+  ];
+
+  for (const [placeholder, value] of replacements) {
+    const trimmedValue = String(value || "").trim();
+    if (!trimmedValue) {
+      return "";
+    }
+
+    const pattern = new RegExp(escapeRegExp(trimmedValue), "gi");
+    if (!pattern.test(template)) {
+      return "";
+    }
+
+    template = template.replace(pattern, placeholder);
+  }
+
+  return template;
+}
+
+function renderFallbackTemplate(template, replacements) {
+  let rendered = String(template || "").trim();
+  if (!rendered) {
+    return "";
+  }
+
+  for (const [placeholder, value] of Object.entries(replacements)) {
+    rendered = rendered.replaceAll(placeholder, value);
+  }
+
+  return rendered;
+}
+
+async function loadFallbackResponses(requestType) {
+  if (!pool) {
+    const data = await readData();
+    return data.fallbackResponses
+      .map(normalizeFallbackResponse)
+      .filter((entry) => entry.requestType === normalizeRequestType(requestType) && entry.reply);
+  }
+
+  await initializeDatabase();
+  const result = await pool.query(
+    `SELECT id, request_type, context_key, reply, template, created_at
+    FROM fallback_responses
+    WHERE request_type = $1
+    ORDER BY created_at DESC
+    LIMIT $2`,
+    [normalizeRequestType(requestType), FALLBACK_RESPONSE_LIMIT]
+  );
+
+  return result.rows.map((row) =>
+    normalizeFallbackResponse({
+      id: row.id,
+      requestType: row.request_type,
+      contextKey: row.context_key,
+      reply: row.reply,
+      template: row.template,
+      createdAt: row.created_at,
+    })
+  );
+}
+
+async function storeFallbackResponse(entry) {
+  const record = normalizeFallbackResponse({
+    id: entry.id || crypto.randomUUID(),
+    requestType: entry.requestType,
+    contextKey: entry.contextKey,
+    reply: entry.reply,
+    template: entry.template,
+    createdAt: entry.createdAt,
+  });
+
+  if (!record.contextKey || !record.reply) {
+    return;
+  }
+
+  if (!pool) {
+    const data = await readData();
+    const alreadyExists = data.fallbackResponses.some((existing) => {
+      const normalized = normalizeFallbackResponse(existing);
+      return normalized.requestType === record.requestType && normalized.reply === record.reply;
+    });
+
+    if (alreadyExists) {
+      return;
+    }
+
+    data.fallbackResponses.push(record);
+    if (data.fallbackResponses.length > FALLBACK_RESPONSE_LIMIT) {
+      data.fallbackResponses = data.fallbackResponses.slice(-FALLBACK_RESPONSE_LIMIT);
+    }
+    await writeData(data);
+    return;
+  }
+
+  await initializeDatabase();
+  const existing = await pool.query(
+    `SELECT id
+    FROM fallback_responses
+    WHERE request_type = $1 AND reply = $2
+    LIMIT 1`,
+    [record.requestType, record.reply]
+  );
+
+  if (existing.rowCount) {
+    return;
+  }
+
+  await pool.query(
+    `INSERT INTO fallback_responses (id, request_type, context_key, reply, template, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6)`,
+    [record.id, record.requestType, record.contextKey, record.reply, record.template, record.createdAt]
+  );
 }
 
 function getLocalDateKey(timestamp) {
@@ -347,7 +644,7 @@ function requestedSameFoodYesterday(requests, childName, food, now = Date.now(),
 function summarizeRequests(requests) {
   const sorted = requests
     .map(sanitizeRequest)
-    .filter((request) => request.id && request.name)
+    .filter((request) => request.id && request.childName && request.name)
     .sort((left, right) => right.createdAt - left.createdAt);
 
   const activeRequests = sorted.filter((request) => request.status === "active");
@@ -358,7 +655,9 @@ function summarizeRequests(requests) {
 
   sorted.forEach((request) => {
     childCounts.set(request.childName, (childCounts.get(request.childName) || 0) + 1);
-    foodCounts.set(request.name, (foodCounts.get(request.name) || 0) + 1);
+    if (request.requestType === "food") {
+      foodCounts.set(request.name, (foodCounts.get(request.name) || 0) + 1);
+    }
 
     const dayKey = new Date(request.createdAt).toISOString().slice(0, 10);
     dayCounts.set(dayKey, (dayCounts.get(dayKey) || 0) + 1);
@@ -395,43 +694,27 @@ async function createSnottyRemark(food) {
     return FALLBACK_SNOTTY_REMARKS[Math.floor(Math.random() * FALLBACK_SNOTTY_REMARKS.length)];
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      input: [
+  const payload = await requestOpenAIResponse([
+    {
+      role: "system",
+      content: [
         {
-          role: "system",
-          content: [
-            {
-              type: "input_text",
-              text:
-                "You write one short, snotty but family-safe remark for a child who requested the same food as yesterday. Keep it playful, not mean, and do not use profanity.",
-            },
-          ],
-        },
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: `Write exactly one sentence about repeating ${food} again today after asking for it yesterday.`,
-            },
-          ],
+          type: "input_text",
+          text:
+            "You write one short, snotty but family-safe remark for a child who requested the same food as yesterday. Keep it playful, not mean, and do not use profanity.",
         },
       ],
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`OpenAI request failed: ${response.status}`);
-  }
-
-  const payload = await response.json();
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text: `Write exactly one sentence about repeating ${food} again today after asking for it yesterday.`,
+        },
+      ],
+    },
+  ]);
   const remark = String(payload.output_text || "").trim();
   return remark || FALLBACK_SNOTTY_REMARKS[Math.floor(Math.random() * FALLBACK_SNOTTY_REMARKS.length)];
 }
@@ -444,7 +727,7 @@ async function buildRequestResponse(requests, { childName, food, excludedRequest
     reply = await createCheekyReply(food);
   } catch (error) {
     console.error("OpenAI reply generation failed:", error);
-    const fallback = fallbackReply(food);
+    const fallback = await fallbackReply(food);
     reply = rememberAndReturn(fallback.text, fallback.key);
     replySource = "fallback";
   }
@@ -478,12 +761,44 @@ async function buildRequestResponse(requests, { childName, food, excludedRequest
   }
 }
 
-async function createRequestRecord({ childName, food, mealType }) {
-  const name = String(food || "").trim().slice(0, 60);
-  const trimmedChildName = String(childName || "").trim().slice(0, 40);
-  const normalizedMealType = mealType === "dinner" ? "dinner" : "lunch";
+async function buildRideRequestResponse({ time, from, to, purpose }) {
+  let reply;
+  let replySource = "openai";
 
-  if (!name || !trimmedChildName) {
+  try {
+    reply = await createRideReply({ time, from, to, purpose });
+  } catch (error) {
+    console.error("OpenAI ride reply generation failed:", error);
+    const fallback = await getRideFallbackReply({ time, from, to, purpose });
+    reply = rememberAndReturn(fallback.text, fallback.key);
+    replySource = "fallback";
+  }
+
+  return {
+    reply,
+    replySource,
+    repeatedFromYesterday: false,
+    snottyRemark: "",
+  };
+}
+
+async function createRequestRecord({ childName, food, mealType, requestType, rideTime, rideFrom, rideTo, purpose }) {
+  const normalizedRequestType = normalizeRequestType(requestType);
+  const trimmedChildName = String(childName || "").trim().slice(0, 40);
+  const normalizedMealType = normalizeMealType(mealType, normalizedRequestType);
+  const name =
+    normalizedRequestType === "ride"
+      ? cleanRideField(purpose, 60)
+      : String(food || "").trim().slice(0, 60);
+  const normalizedRideTime = normalizedRequestType === "ride" ? cleanRideField(rideTime, 20) : "";
+  const normalizedRideFrom = normalizedRequestType === "ride" ? cleanRideField(rideFrom, 80) : "";
+  const normalizedRideTo = normalizedRequestType === "ride" ? cleanRideField(rideTo, 80) : "";
+
+  if (
+    !trimmedChildName ||
+    !name ||
+    (normalizedRequestType === "ride" && (!normalizedRideTime || !normalizedRideFrom || !normalizedRideTo))
+  ) {
     return null;
   }
 
@@ -491,7 +806,11 @@ async function createRequestRecord({ childName, food, mealType }) {
     id: crypto.randomUUID(),
     childName: trimmedChildName,
     name,
+    requestType: normalizedRequestType,
     mealType: normalizedMealType,
+    rideTime: normalizedRideTime,
+    rideFrom: normalizedRideFrom,
+    rideTo: normalizedRideTo,
     createdAt: Date.now(),
     updatedAt: null,
     reply: "",
@@ -503,10 +822,18 @@ async function createRequestRecord({ childName, food, mealType }) {
   };
 
   const requests = await loadRequestRecords();
-  const requestResponse = await buildRequestResponse(requests, {
-    childName: trimmedChildName,
-    food: name,
-  });
+  const requestResponse =
+    normalizedRequestType === "ride"
+      ? await buildRideRequestResponse({
+          time: normalizedRideTime,
+          from: normalizedRideFrom,
+          to: normalizedRideTo,
+          purpose: name,
+        })
+      : await buildRequestResponse(requests, {
+          childName: trimmedChildName,
+          food: name,
+        });
 
   requestRecord.reply = requestResponse.reply;
   requestRecord.replySource = requestResponse.replySource;
@@ -517,13 +844,33 @@ async function createRequestRecord({ childName, food, mealType }) {
   return sanitizeRequest(requestRecord);
 }
 
-async function updateRequestRecord(requestId, { childName, food, mealType }) {
-  const name = String(food || "").trim().slice(0, 60);
+async function updateRequestRecord(
+  requestId,
+  { childName, food, mealType, requestType, rideTime, rideFrom, rideTo, purpose }
+) {
+  const normalizedRequestType = normalizeRequestType(requestType);
   const trimmedChildName = String(childName || "").trim().slice(0, 40);
-  const normalizedMealType = mealType === "dinner" ? "dinner" : "lunch";
+  const normalizedMealType = normalizeMealType(mealType, normalizedRequestType);
+  const name =
+    normalizedRequestType === "ride"
+      ? cleanRideField(purpose, 60)
+      : String(food || "").trim().slice(0, 60);
+  const normalizedRideTime = normalizedRequestType === "ride" ? cleanRideField(rideTime, 20) : "";
+  const normalizedRideFrom = normalizedRequestType === "ride" ? cleanRideField(rideFrom, 80) : "";
+  const normalizedRideTo = normalizedRequestType === "ride" ? cleanRideField(rideTo, 80) : "";
 
-  if (!name || !trimmedChildName) {
-    return { error: "Child name and food are required.", statusCode: 400 };
+  if (
+    !trimmedChildName ||
+    !name ||
+    (normalizedRequestType === "ride" && (!normalizedRideTime || !normalizedRideFrom || !normalizedRideTo))
+  ) {
+    return {
+      error:
+        normalizedRequestType === "ride"
+          ? "Child name, time, from, to, and purpose are required."
+          : "Child name and food are required.",
+      statusCode: 400,
+    };
   }
 
   const requests = await loadRequestRecords();
@@ -537,14 +884,26 @@ async function updateRequestRecord(requestId, { childName, food, mealType }) {
     return { error: "Only today's active requests for this child can be edited.", statusCode: 403 };
   }
 
-  const requestResponse = await buildRequestResponse(requests, {
-    childName: trimmedChildName,
-    food: name,
-    excludedRequestId: requestId,
-  });
+  const requestResponse =
+    normalizedRequestType === "ride"
+      ? await buildRideRequestResponse({
+          time: normalizedRideTime,
+          from: normalizedRideFrom,
+          to: normalizedRideTo,
+          purpose: name,
+        })
+      : await buildRequestResponse(requests, {
+          childName: trimmedChildName,
+          food: name,
+          excludedRequestId: requestId,
+        });
 
   request.name = name;
+  request.requestType = normalizedRequestType;
   request.mealType = normalizedMealType;
+  request.rideTime = normalizedRideTime;
+  request.rideFrom = normalizedRideFrom;
+  request.rideTo = normalizedRideTo;
   request.updatedAt = Date.now();
   request.reply = requestResponse.reply;
   request.replySource = requestResponse.replySource;
@@ -633,10 +992,74 @@ function fallbackCandidates(food) {
   return candidates;
 }
 
-function fallbackReply(food) {
+async function fallbackReply(food) {
+  const storedResponses = await loadFallbackResponses("food");
+  const contextKey = buildFoodContextKey(food);
+  const storedCandidates = storedResponses
+    .filter((entry) => entry.contextKey === contextKey || entry.template.includes("{food}"))
+    .map((entry, index) => {
+      const rendered = entry.template.includes("{food}")
+        ? renderFallbackTemplate(entry.template, { "{food}": food })
+        : entry.reply;
+
+      return {
+        key: entry.id || `stored-food:${index}`,
+        text: rendered,
+      };
+    })
+    .filter((entry) => entry.text);
+
   const allCandidates = fallbackCandidates(food);
-  const freshCandidates = allCandidates.filter((candidate) => !hasRecentReply(candidate.key));
-  const pool = freshCandidates.length ? freshCandidates : allCandidates;
+  const candidatePool = [...storedCandidates, ...allCandidates];
+  const freshCandidates = candidatePool.filter((candidate) => !hasRecentReply(candidate.key));
+  const pool = freshCandidates.length ? freshCandidates : candidatePool;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
+function createRideFallbackReply({ time, from, to, purpose }) {
+  const template = RIDE_REPLY_TEMPLATES[Math.floor(Math.random() * RIDE_REPLY_TEMPLATES.length)];
+  const text = template
+    .replaceAll("{time}", time)
+    .replaceAll("{from}", from)
+    .replaceAll("{to}", to)
+    .replaceAll("{purpose}", purpose);
+
+  return {
+    key: `ride:${time}:${from}:${to}:${purpose}`,
+    text,
+  };
+}
+
+async function getRideFallbackReply({ time, from, to, purpose }) {
+  const storedResponses = await loadFallbackResponses("ride");
+  const contextKey = buildRideContextKey({ time, from, to, purpose });
+  const storedCandidates = storedResponses
+    .filter(
+      (entry) =>
+        entry.contextKey === contextKey ||
+        ["{time}", "{from}", "{to}", "{purpose}"].every((placeholder) => entry.template.includes(placeholder))
+    )
+    .map((entry, index) => {
+      const rendered = entry.template
+        ? renderFallbackTemplate(entry.template, {
+            "{time}": time,
+            "{from}": from,
+            "{to}": to,
+            "{purpose}": purpose,
+          })
+        : entry.reply;
+
+      return {
+        key: entry.id || `stored-ride:${index}`,
+        text: rendered,
+      };
+    })
+    .filter((entry) => entry.text);
+
+  const builtInFallback = createRideFallbackReply({ time, from, to, purpose });
+  const candidatePool = [...storedCandidates, builtInFallback];
+  const freshCandidates = candidatePool.filter((candidate) => !hasRecentReply(candidate.key));
+  const pool = freshCandidates.length ? freshCandidates : candidatePool;
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
@@ -679,7 +1102,7 @@ function rememberAndReturn(reply, dedupeKey = reply) {
 
 async function createCheekyReply(food) {
   if (!OPENAI_API_KEY) {
-    const fallback = fallbackReply(food);
+    const fallback = await fallbackReply(food);
     return rememberAndReturn(fallback.text, fallback.key);
   }
 
@@ -690,53 +1113,92 @@ async function createCheekyReply(food) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const styleHint = randomStyleHint();
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: [
+    const payload = await requestOpenAIResponse([
+      {
+        role: "system",
+        content: [
           {
-            role: "system",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  "You are a playful lunchroom comedian for families. Reply with exactly one short, cheeky sentence about the child's requested food. Keep it funny, light, and family-safe. Do not be cruel, threatening, or insulting. Mention the requested food by name. Use a fresh angle every time and avoid repeating stock phrasing.",
-              },
-            ],
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "input_text",
-                text:
-                  `The child wants to eat: ${food}. ${styleHint}\nAvoid saying anything too similar to these recent replies:\n${recentReplyList}`,
-              },
-            ],
+            type: "input_text",
+            text:
+              "You are a playful lunchroom comedian for families. Reply with exactly one short, cheeky sentence about the child's requested food. Keep it funny, light, and family-safe. Do not be cruel, threatening, or insulting. Mention the requested food by name. Use a fresh angle every time and avoid repeating stock phrasing.",
           },
         ],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
-    }
-
-    const payload = await response.json();
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text:
+              `The child wants to eat: ${food}. ${styleHint}\nAvoid saying anything too similar to these recent replies:\n${recentReplyList}`,
+          },
+        ],
+      },
+    ]);
     const reply = (payload.output_text || "").trim();
 
     if (reply && !hasRecentReply(reply)) {
+      await storeFallbackResponse({
+        requestType: "food",
+        contextKey: buildFoodContextKey(food),
+        reply,
+        template: createFoodFallbackTemplate(reply, food),
+      });
       return rememberAndReturn(reply);
     }
   }
 
-  const fallback = fallbackReply(food);
+  const fallback = await fallbackReply(food);
+  return rememberAndReturn(fallback.text, fallback.key);
+}
+
+async function createRideReply({ time, from, to, purpose }) {
+  if (!OPENAI_API_KEY) {
+    const fallback = await getRideFallbackReply({ time, from, to, purpose });
+    return rememberAndReturn(fallback.text, fallback.key);
+  }
+
+  const recentReplyList = recentReplies.length
+    ? recentReplies.map((reply) => `- ${reply.text}`).join("\n")
+    : "None";
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const payload = await requestOpenAIResponse([
+      {
+        role: "system",
+        content: [
+          {
+            type: "input_text",
+            text:
+              "You write exactly one short, playful, family-safe sentence confirming a child's ride request. Mention the ride time, the route, and the purpose. Keep it light and useful, not sarcastic or mean.",
+          },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text:
+              `Ride request: at ${time}, from ${from}, to ${to}, for ${purpose}. Avoid sounding too similar to these recent replies:\n${recentReplyList}`,
+          },
+        ],
+      },
+    ]);
+    const reply = (payload.output_text || "").trim();
+
+    if (reply && !hasRecentReply(reply)) {
+      await storeFallbackResponse({
+        requestType: "ride",
+        contextKey: buildRideContextKey({ time, from, to, purpose }),
+        reply,
+        template: createRideFallbackTemplate(reply, { time, from, to, purpose }),
+      });
+      return rememberAndReturn(reply);
+    }
+  }
+
+  const fallback = await getRideFallbackReply({ time, from, to, purpose });
   return rememberAndReturn(fallback.text, fallback.key);
 }
 
@@ -759,7 +1221,7 @@ const server = http.createServer(async (request, response) => {
         const reply = await createCheekyReply(food);
         sendJson(response, 200, { reply });
       } catch (error) {
-        const fallback = fallbackReply(food);
+        const fallback = await fallbackReply(food);
         sendJson(response, 200, { reply: rememberAndReturn(fallback.text, fallback.key), fallback: true });
       }
       return;
@@ -784,10 +1246,15 @@ const server = http.createServer(async (request, response) => {
         childName: parsed.childName,
         food: parsed.food,
         mealType: parsed.mealType,
+        requestType: parsed.requestType,
+        rideTime: parsed.rideTime,
+        rideFrom: parsed.rideFrom,
+        rideTo: parsed.rideTo,
+        purpose: parsed.purpose,
       });
 
       if (!requestRecord) {
-        sendJson(response, 400, { error: "Child name and food are required." });
+        sendJson(response, 400, { error: "Required request fields are missing." });
         return;
       }
 
@@ -805,6 +1272,11 @@ const server = http.createServer(async (request, response) => {
           childName: parsed.childName,
           food: parsed.food,
           mealType: parsed.mealType,
+          requestType: parsed.requestType,
+          rideTime: parsed.rideTime,
+          rideFrom: parsed.rideFrom,
+          rideTo: parsed.rideTo,
+          purpose: parsed.purpose,
         });
 
         if (result.error) {
@@ -877,7 +1349,7 @@ async function startServer() {
           pool ? "postgres" : "local-json"
         }`
       );
-      console.log(`FeedMe Today running at http://${HOST}:${PORT}`);
+      console.log(`I want ... running at http://${HOST}:${PORT}`);
     });
   } catch (error) {
     console.error("Failed to initialize persistence layer:", error);

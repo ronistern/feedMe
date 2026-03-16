@@ -14,6 +14,16 @@ Open `http://127.0.0.1:3000`.
 
 If `OPENAI_API_KEY` is missing, the app still works and uses built-in joke fallbacks.
 
+## Test OpenAI connectivity
+
+```powershell
+$env:OPENAI_API_KEY="your_key_here"
+$env:OPENAI_MODEL="gpt-5"
+npm run test:openai
+```
+
+This sends one minimal request directly to the OpenAI Responses API and prints either the provider error or the returned text.
+
 ## Deploy to Render
 
 This repo includes a `render.yaml` Blueprint config for a free Node web service.

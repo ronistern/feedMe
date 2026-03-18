@@ -53,8 +53,6 @@ const profileSubmitButton = document.getElementById("profile-submit");
 const profileNameGrid = document.getElementById("profile-name-grid");
 const profileRoleInputs = document.querySelectorAll('input[name="profileRole"]');
 const headerNamePicker = document.getElementById("header-name-picker");
-const parentCodeSection = document.getElementById("parent-code-section");
-const parentCodeInput = document.getElementById("parent-code-input");
 const clientFallbackReplies = [
   "That order just made the frying pan raise an eyebrow.",
   "Interesting choice. The kitchen staff is now in dramatic negotiations.",
@@ -81,11 +79,13 @@ const AMERICAN_VOICE_NAMES = [
   "Nicky",
 ];
 const SESSION_KEY = "feedme-profile";
-const PARENT_CODE = "!!!";
-const GANDALF_AUDIO_PATH = "/assets/you-shall-not-pass.mp3";
 const PROFILES = {
   kids: ["Ofer", "Amit", "Nitzan"],
-  parent: ["Adi", "Roni"],
+  parent: ["Roni", "Adi"],
+};
+const PARENT_EMAILS = {
+  Roni: "roni.stern@gmail.com",
+  Adi: "adi.stern@gmail.com",
 };
 const RIDE_SUGGESTION_LIMIT = 12;
 
@@ -455,6 +455,67 @@ function formatRequestSubdetails(request) {
   return "";
 }
 
+function buildRideEventTimes(request) {
+  const baseDate = new Date(request.createdAt || Date.now());
+  const [hours, minutes] = String(request.rideTime || "00:00")
+    .split(":")
+    .map((value) => Number(value) || 0);
+  const start = new Date(baseDate);
+  start.setHours(hours, minutes, 0, 0);
+  const end = new Date(start.getTime() + 30 * 60 * 1000);
+  return { start, end };
+}
+
+function formatCalendarDateLocal(date, compact = false) {
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+
+  if (compact) {
+    return `${year}${month}${day}T${hours}${minutes}${seconds}`;
+  }
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}`;
+}
+
+function getCalendarInviteUrl(provider, request) {
+  const { start, end } = buildRideEventTimes(request);
+  const parentEmail = PARENT_EMAILS[activeProfile?.name] || PARENT_EMAILS.Roni;
+  const subject = `${request.childName} ride: ${request.name}`;
+  const location = `${request.rideFrom} -> ${request.rideTo}`;
+  const details = `Ride request for ${request.childName}\nPurpose: ${request.name}\nFrom: ${request.rideFrom}\nTo: ${request.rideTo}\nTime: ${request.rideTime}\nParent email: ${parentEmail}`;
+
+  if (provider === "google") {
+    const url = new URL("https://calendar.google.com/calendar/render");
+    url.searchParams.set("action", "TEMPLATE");
+    url.searchParams.set("text", subject);
+    url.searchParams.set(
+      "dates",
+      `${formatCalendarDateLocal(start, true)}/${formatCalendarDateLocal(end, true)}`
+    );
+    url.searchParams.set("details", details);
+    url.searchParams.set("location", location);
+    url.searchParams.set("add", parentEmail);
+    return url.toString();
+  }
+
+  const url = new URL("https://outlook.office.com/calendar/0/deeplink/compose");
+  url.searchParams.set("subject", subject);
+  url.searchParams.set("body", details);
+  url.searchParams.set("startdt", formatCalendarDateLocal(start));
+  url.searchParams.set("enddt", formatCalendarDateLocal(end));
+  url.searchParams.set("location", location);
+  url.searchParams.set("to", parentEmail);
+  return url.toString();
+}
+
+function openRideCalendarInvite(provider, request) {
+  window.open(getCalendarInviteUrl(provider, request), "_blank", "noopener,noreferrer");
+}
+
 function getCurrentKidRequests() {
   if (!activeProfile || activeProfile.role !== "kids") {
     return [];
@@ -588,13 +649,40 @@ function renderRequests() {
         await archiveRequest(request.id);
       });
 
+      const actions = document.createElement("div");
+      actions.className = "request-actions";
+
+      if (request.requestType === "ride") {
+        const googleButton = document.createElement("button");
+        googleButton.className = "request-calendar";
+        googleButton.type = "button";
+        googleButton.textContent = "Google";
+        googleButton.setAttribute("aria-label", `Open Google Calendar invite for ${request.name}`);
+        googleButton.addEventListener("click", () => {
+          openRideCalendarInvite("google", request);
+        });
+
+        const outlookButton = document.createElement("button");
+        outlookButton.className = "request-calendar";
+        outlookButton.type = "button";
+        outlookButton.textContent = "Outlook";
+        outlookButton.setAttribute("aria-label", `Open Outlook invite for ${request.name}`);
+        outlookButton.addEventListener("click", () => {
+          openRideCalendarInvite("outlook", request);
+        });
+
+        actions.append(googleButton, outlookButton);
+      }
+
+      actions.append(removeButton);
+
       content.append(child, name);
       if (meta) {
         content.append(meta);
       }
       content.append(time);
       renderRequestReply(content, request);
-      item.append(content, removeButton);
+      item.append(content, actions);
       requestList.append(item);
     });
 
@@ -886,41 +974,6 @@ function speakReply(message, options = {}) {
   });
 }
 
-async function playAudioOnce(source) {
-  const audio = new Audio(source);
-  audio.preload = "auto";
-  await audio.play();
-}
-
-async function playGandalfLine() {
-  try {
-    await playAudioOnce(GANDALF_AUDIO_PATH);
-  } catch {
-    await speakMessage("You shall not pass", {
-      voice: getGandalfVoice(),
-      rate: 0.84,
-      pitch: 0.66,
-      volume: 1,
-    });
-  }
-}
-
-function getGandalfVoice() {
-  if (!availableVoices.length) {
-    return null;
-  }
-
-  return (
-    availableVoices.find(
-      (voice) =>
-        voice.lang.toLowerCase().startsWith("en") &&
-        (/david|daniel|fred|george|male/i.test(voice.name) ||
-          voice.name.includes("Google UK English Male") ||
-          voice.name.includes("Microsoft Ryan"))
-    ) || getPreferredVoice()
-  );
-}
-
 function getClientFallbackReply(food, childName) {
   const index = Math.floor(Math.random() * clientFallbackReplies.length);
   return `${childName}, you want ${food}? ${clientFallbackReplies[index]}`;
@@ -1161,10 +1214,6 @@ if (analysisLink) {
 profileRoleInputs.forEach((input) => {
   input.addEventListener("change", () => {
     renderProfileNames(input.value);
-    parentCodeSection.classList.toggle("is-hidden", input.value !== "parent");
-    if (input.value !== "parent") {
-      parentCodeInput.value = "";
-    }
     profileStatus.textContent = "";
   });
 });
@@ -1184,17 +1233,8 @@ profileSubmitButton.addEventListener("click", () => {
     return;
   }
 
-  if (role === "parent" && parentCodeInput.value !== PARENT_CODE) {
-    profileStatus.textContent = "You shall not pass";
-    void playGandalfLine();
-    parentCodeInput.focus();
-    parentCodeInput.select();
-    return;
-  }
-
   saveProfile({ role, name });
   profileStatus.textContent = "";
-  parentCodeInput.value = "";
   applyProfile(activeProfile);
 });
 

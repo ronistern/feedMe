@@ -68,6 +68,14 @@ const STYLE_HINTS = [
   "Say it like a pirate who runs a lunchroom.",
   "Say it like a game show host revealing a surprise prize.",
   "Say it like a sleepy parent trying to stay funny.",
+  "Say it like breaking news from a very chaotic kitchen.",
+  "Say it like a fantasy wizard reacting to a sacred menu quest.",
+  "Say it like a courtroom lawyer making a dramatic closing argument.",
+  "Say it like a nature documentary about a rare lunch decision.",
+  "Say it like mission control handling a snack emergency.",
+  "Say it like an old-time radio announcer with huge feelings.",
+  "Say it like a museum curator unveiling a suspicious masterpiece.",
+  "Say it like a sports draft pick for the Hall of Lunch.",
 ];
 const FALLBACK_SNOTTY_REMARKS = [
   "Again? Your menu strategy has the range of a broken toaster.",
@@ -1120,7 +1128,7 @@ async function createCheekyReply(food) {
           {
             type: "input_text",
             text:
-              "You are a playful lunchroom comedian for families. Reply with exactly one short, cheeky sentence about the child's requested food. Keep it funny, light, and family-safe. Do not be cruel, threatening, or insulting. Mention the requested food by name. Use a fresh angle every time and avoid repeating stock phrasing.",
+              "You are a brilliantly funny family-safe chef comedian. Reply with exactly one short sentence about the child's requested food. Every answer must feel specific, surprising, and freshly improvised, not like a canned joke. Mention the food by name. Vary the comic structure from reply to reply: sometimes use mock drama, absurd comparison, fake seriousness, overconfident hype, tiny plot twist, or a weird image. Avoid generic lines, recycled praise, repeated sentence rhythms, and obvious filler like 'bold choice' or 'interesting choice'. Keep it playful, vivid, and genuinely funny without being mean, threatening, or insulting.",
           },
         ],
       },
@@ -1130,7 +1138,7 @@ async function createCheekyReply(food) {
           {
             type: "input_text",
             text:
-              `The child wants to eat: ${food}. ${styleHint}\nAvoid saying anything too similar to these recent replies:\n${recentReplyList}`,
+              `The child wants to eat: ${food}. ${styleHint}\nWrite 9 to 18 words. Make it punchy and unexpected. Avoid sounding anything like these recent replies:\n${recentReplyList}`,
           },
         ],
       },

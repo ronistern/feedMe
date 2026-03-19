@@ -546,6 +546,15 @@ button {
   gap: 0.7rem;
 }
 
+.parent-activity-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.parent-activity-stack .requests-header {
+  margin-top: 0.25rem;
+}
+
 .ride-form-grid {
   display: grid;
   grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
@@ -673,6 +682,36 @@ textarea {
   border: 1px solid rgba(36, 49, 63, 0.08);
 }
 
+.compact-table-wrap {
+  margin-top: 0.25rem;
+  overflow-x: auto;
+}
+
+.compact-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.compact-table th,
+.compact-table td {
+  padding: 0.55rem 0.45rem;
+  border-bottom: 1px solid rgba(36, 49, 63, 0.08);
+  text-align: left;
+}
+
+.compact-table thead th {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.compact-table tbody th {
+  font-weight: 800;
+  color: var(--text);
+}
+
 .request-actions {
   display: inline-flex;
   gap: 0.55rem;
@@ -702,6 +741,10 @@ textarea {
   font-size: 0.9rem;
   font-weight: 700;
   color: var(--orange-deep);
+}
+
+.request-meta + .request-meta {
+  margin-top: 0.15rem;
 }
 
 .request-reply {

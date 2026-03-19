@@ -9,11 +9,17 @@ const PORT = Number(process.env.PORT || 3000);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
 const OPENAI_COOLDOWN_MS = Number(process.env.OPENAI_COOLDOWN_MS || 5 * 60 * 1000);
+const APP_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Jerusalem";
 const DATABASE_URL = process.env.DATABASE_URL;
 const DATA_FILE = path.join(__dirname, "data", "requests.json");
 const DATA_TEMPLATE = {
   requests: [],
   fallbackResponses: [],
+  dailyCheckIns: [],
+};
+const PROFILES = {
+  kids: ["Ofer", "Amit", "Nitzan"],
+  parent: ["Roni", "Adi"],
 };
 const pool = DATABASE_URL
   ? new Pool({
@@ -105,6 +111,14 @@ const RIDE_REPLY_TEMPLATES = [
   "Request received for a {time} ride from {from} to {to} for {purpose}. The back seat is considering terms.",
   "Transportation alert: {purpose}, {from} to {to}, leaving at {time}. The ride desk has it on the board.",
   "Your ride request for {purpose} at {time} from {from} to {to} is in. The driver may request snacks as payment.",
+];
+const LUNCH_BREAK_UNKNOWN_CONTEXT_KEY = "system:lunch-break-unknown";
+const LUNCH_BREAK_UNKNOWN_POOL_TARGET = 20;
+const LUNCH_BREAK_UNKNOWN_FALLBACKS = [
+  "Go check it out and report back like a proper lunch detective.",
+  "March to the schedule board and return with facts, not vibes.",
+  "The lunch hour did not vanish. Go find it.",
+  "Off you go, tiny investigator. Lunch time will not discover itself.",
 ];
 const recentReplies = [];
 let databaseInitializationPromise = null;
@@ -229,11 +243,27 @@ async function initializeDatabase() {
         )
       `);
 
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS daily_checkins (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          date_key TEXT NOT NULL,
+          role_name TEXT NOT NULL,
+          person_name TEXT NOT NULL,
+          lunch_break_time TEXT NOT NULL DEFAULT '',
+          created_at BIGINT NOT NULL,
+          updated_at BIGINT,
+          UNIQUE (device_id, date_key)
+        )
+      `);
+
       await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS request_type TEXT NOT NULL DEFAULT 'food'`);
       await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS ride_time TEXT NOT NULL DEFAULT ''`);
       await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS ride_from TEXT NOT NULL DEFAULT ''`);
       await pool.query(`ALTER TABLE requests ADD COLUMN IF NOT EXISTS ride_to TEXT NOT NULL DEFAULT ''`);
       await pool.query(`ALTER TABLE fallback_responses ADD COLUMN IF NOT EXISTS template TEXT NOT NULL DEFAULT ''`);
+      await pool.query(`ALTER TABLE daily_checkins ADD COLUMN IF NOT EXISTS lunch_break_time TEXT NOT NULL DEFAULT ''`);
+      await pool.query(`ALTER TABLE daily_checkins ADD COLUMN IF NOT EXISTS updated_at BIGINT`);
     })();
   }
 
@@ -258,6 +288,19 @@ function mapRowToRequest(row) {
     repeatedFromYesterday: Boolean(row.repeated_from_yesterday),
     status: row.status,
     archivedAt: row.archived_at == null ? null : Number(row.archived_at),
+  };
+}
+
+function mapRowToDailyCheckIn(row) {
+  return {
+    id: row.id,
+    deviceId: row.device_id,
+    dateKey: row.date_key,
+    role: row.role_name,
+    name: row.person_name,
+    lunchBreakTime: row.lunch_break_time,
+    createdAt: Number(row.created_at),
+    updatedAt: row.updated_at == null ? null : Number(row.updated_at),
   };
 }
 
@@ -396,6 +439,101 @@ async function saveUpdatedRequestRecord(record) {
   return result.rowCount > 0;
 }
 
+async function loadDailyCheckInRecords() {
+  if (!pool) {
+    const data = await readData();
+    return data.dailyCheckIns.map(sanitizeDailyCheckIn);
+  }
+
+  await initializeDatabase();
+  const result = await pool.query(
+    `SELECT
+      id,
+      device_id,
+      date_key,
+      role_name,
+      person_name,
+      lunch_break_time,
+      created_at,
+      updated_at
+    FROM daily_checkins`
+  );
+
+  return result.rows.map(mapRowToDailyCheckIn).map(sanitizeDailyCheckIn);
+}
+
+async function insertDailyCheckInRecord(record) {
+  if (!pool) {
+    const data = await readData();
+    data.dailyCheckIns.push(record);
+    await writeData(data);
+    return;
+  }
+
+  await initializeDatabase();
+  await pool.query(
+    `INSERT INTO daily_checkins (
+      id,
+      device_id,
+      date_key,
+      role_name,
+      person_name,
+      lunch_break_time,
+      created_at,
+      updated_at
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [
+      record.id,
+      record.deviceId,
+      record.dateKey,
+      record.role,
+      record.name,
+      record.lunchBreakTime,
+      record.createdAt,
+      record.updatedAt,
+    ]
+  );
+}
+
+async function saveUpdatedDailyCheckInRecord(record) {
+  if (!pool) {
+    const data = await readData();
+    const index = data.dailyCheckIns.findIndex((entry) => entry.id === record.id);
+    if (index === -1) {
+      return false;
+    }
+
+    data.dailyCheckIns[index] = record;
+    await writeData(data);
+    return true;
+  }
+
+  await initializeDatabase();
+  const result = await pool.query(
+    `UPDATE daily_checkins
+    SET device_id = $2,
+        date_key = $3,
+        role_name = $4,
+        person_name = $5,
+        lunch_break_time = $6,
+        created_at = $7,
+        updated_at = $8
+    WHERE id = $1`,
+    [
+      record.id,
+      record.deviceId,
+      record.dateKey,
+      record.role,
+      record.name,
+      record.lunchBreakTime,
+      record.createdAt,
+      record.updatedAt,
+    ]
+  );
+
+  return result.rowCount > 0;
+}
+
 async function readData() {
   await ensureDataFile();
 
@@ -405,6 +543,7 @@ async function readData() {
     return {
       requests: Array.isArray(parsed.requests) ? parsed.requests : [],
       fallbackResponses: Array.isArray(parsed.fallbackResponses) ? parsed.fallbackResponses : [],
+      dailyCheckIns: Array.isArray(parsed.dailyCheckIns) ? parsed.dailyCheckIns : [],
     };
   } catch {
     return structuredClone(DATA_TEMPLATE);
@@ -436,6 +575,25 @@ function sanitizeRequest(record) {
     repeatedFromYesterday: Boolean(record.repeatedFromYesterday),
     status: record.status === "archived" ? "archived" : "active",
     archivedAt: record.archivedAt ? Number(record.archivedAt) : null,
+  };
+}
+
+function sanitizeDailyCheckIn(record) {
+  const role = record.role === "kids" ? "kids" : "parent";
+  const validNames = PROFILES[role] || [];
+  const fallbackName = validNames[0] || "";
+  const normalizedName = validNames.includes(record.name) ? record.name : fallbackName;
+
+  return {
+    id: String(record.id || crypto.randomUUID()),
+    deviceId: String(record.deviceId || "").trim().slice(0, 120),
+    dateKey: String(record.dateKey || getLocalDateKey(Date.now())).trim().slice(0, 10),
+    role,
+    name: normalizedName,
+    lunchBreakTime:
+      role === "kids" ? String(record.lunchBreakTime || "").trim().slice(0, 5) : "",
+    createdAt: Number(record.createdAt || Date.now()),
+    updatedAt: record.updatedAt == null ? null : Number(record.updatedAt),
   };
 }
 
@@ -555,6 +713,40 @@ async function loadFallbackResponses(requestType) {
   );
 }
 
+async function loadFallbackResponsesByContext(contextKey) {
+  const normalizedContextKey = String(contextKey || "").trim().slice(0, 240);
+  if (!normalizedContextKey) {
+    return [];
+  }
+
+  if (!pool) {
+    const data = await readData();
+    return data.fallbackResponses
+      .map(normalizeFallbackResponse)
+      .filter((entry) => entry.contextKey === normalizedContextKey && entry.reply);
+  }
+
+  await initializeDatabase();
+  const result = await pool.query(
+    `SELECT id, request_type, context_key, reply, template, created_at
+    FROM fallback_responses
+    WHERE context_key = $1
+    ORDER BY created_at ASC`,
+    [normalizedContextKey]
+  );
+
+  return result.rows.map((row) =>
+    normalizeFallbackResponse({
+      id: row.id,
+      requestType: row.request_type,
+      contextKey: row.context_key,
+      reply: row.reply,
+      template: row.template,
+      createdAt: row.created_at,
+    })
+  );
+}
+
 async function storeFallbackResponse(entry) {
   const record = normalizeFallbackResponse({
     id: entry.id || crypto.randomUUID(),
@@ -609,18 +801,23 @@ async function storeFallbackResponse(entry) {
 }
 
 function getLocalDateKey(timestamp) {
-  const date = new Date(timestamp);
-  const year = String(date.getFullYear());
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(timestamp));
+  const year = parts.find((part) => part.type === "year")?.value || "0000";
+  const month = parts.find((part) => part.type === "month")?.value || "00";
+  const day = parts.find((part) => part.type === "day")?.value || "00";
   return `${year}-${month}-${day}`;
 }
 
 function getYesterdayDateKey(now = Date.now()) {
-  const date = new Date(now);
-  date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() - 1);
-  return getLocalDateKey(date.getTime());
+  const [year, month, day] = getLocalDateKey(now).split("-").map(Number);
+  const date = new Date(Date.UTC(year, (month || 1) - 1, day || 1));
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
 }
 
 function isEditableToday(request, childName, now = Date.now()) {
@@ -667,7 +864,7 @@ function summarizeRequests(requests) {
       foodCounts.set(request.name, (foodCounts.get(request.name) || 0) + 1);
     }
 
-    const dayKey = new Date(request.createdAt).toISOString().slice(0, 10);
+    const dayKey = getLocalDateKey(request.createdAt);
     dayCounts.set(dayKey, (dayCounts.get(dayKey) || 0) + 1);
   });
 
@@ -695,6 +892,161 @@ function summarizeRequests(requests) {
 async function listRequests() {
   const requests = await loadRequestRecords();
   return summarizeRequests(requests);
+}
+
+async function listTodayDailyCheckIns() {
+  const dateKey = getLocalDateKey(Date.now());
+  const records = await loadDailyCheckInRecords();
+  return records
+    .filter((record) => record.dateKey === dateKey && record.deviceId)
+    .sort((left, right) => right.createdAt - left.createdAt);
+}
+
+async function findTodayDailyCheckInByDevice(deviceId) {
+  const normalizedDeviceId = String(deviceId || "").trim().slice(0, 120);
+  if (!normalizedDeviceId) {
+    return null;
+  }
+
+  const todayCheckIns = await listTodayDailyCheckIns();
+  return todayCheckIns.find((record) => record.deviceId === normalizedDeviceId) || null;
+}
+
+async function saveTodayDailyCheckIn({ deviceId, role, name, lunchBreakTime }) {
+  const normalizedDeviceId = String(deviceId || "").trim().slice(0, 120);
+  const normalizedRole = role === "kids" ? "kids" : role === "parent" ? "parent" : "";
+  const normalizedName = String(name || "").trim();
+  const normalizedLunchBreakTime = String(lunchBreakTime || "").trim().slice(0, 5);
+
+  if (!normalizedDeviceId || !normalizedRole || !PROFILES[normalizedRole]?.includes(normalizedName)) {
+    return null;
+  }
+
+  if (normalizedRole === "kids" && !normalizedLunchBreakTime) {
+    return null;
+  }
+
+  const dateKey = getLocalDateKey(Date.now());
+  const existing = await findTodayDailyCheckInByDevice(normalizedDeviceId);
+
+  if (existing) {
+    const updated = sanitizeDailyCheckIn({
+      ...existing,
+      role: normalizedRole,
+      name: normalizedName,
+      lunchBreakTime: normalizedRole === "kids" ? normalizedLunchBreakTime : "",
+      updatedAt: Date.now(),
+    });
+    await saveUpdatedDailyCheckInRecord(updated);
+    return updated;
+  }
+
+  const record = sanitizeDailyCheckIn({
+    id: crypto.randomUUID(),
+    deviceId: normalizedDeviceId,
+    dateKey,
+    role: normalizedRole,
+    name: normalizedName,
+    lunchBreakTime: normalizedRole === "kids" ? normalizedLunchBreakTime : "",
+    createdAt: Date.now(),
+    updatedAt: null,
+  });
+  await insertDailyCheckInRecord(record);
+  return record;
+}
+
+async function generateLunchBreakUnknownPool() {
+  if (!OPENAI_API_KEY) {
+    return [];
+  }
+
+  const payload = await requestOpenAIResponse([
+    {
+      role: "system",
+      content: [
+        {
+          type: "input_text",
+          text:
+            "You write funny, family-safe one-sentence lines telling a kid to go check when lunch break is instead of saying they do not know. Keep them playful, brisk, and mildly teasing, never cruel. No profanity. No emojis. Every line should be distinct.",
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "input_text",
+          text:
+            "Return exactly 20 lines as a JSON array of strings. Each string should be 8 to 18 words. The message should tell the kid to go check when lunch is instead of being lazy. Vary the joke style and wording a lot.",
+        },
+      ],
+    },
+  ]);
+
+  let parsed;
+  try {
+    parsed = JSON.parse(String(payload.output_text || "[]"));
+  } catch {
+    parsed = [];
+  }
+
+  return Array.isArray(parsed)
+    ? parsed
+        .map((entry) => String(entry || "").trim().replace(/\s+/g, " ").slice(0, 240))
+        .filter(Boolean)
+    : [];
+}
+
+async function ensureLunchBreakUnknownPool() {
+  const existing = await loadFallbackResponsesByContext(LUNCH_BREAK_UNKNOWN_CONTEXT_KEY);
+  if (existing.length >= LUNCH_BREAK_UNKNOWN_POOL_TARGET) {
+    return existing;
+  }
+
+  let generated = [];
+  try {
+    generated = await generateLunchBreakUnknownPool();
+  } catch (error) {
+    console.error("OpenAI lunch-break nudge generation failed:", error);
+  }
+
+  const uniqueReplies = Array.from(new Set([...existing.map((entry) => entry.reply), ...generated])).slice(
+    0,
+    LUNCH_BREAK_UNKNOWN_POOL_TARGET
+  );
+
+  for (const reply of uniqueReplies) {
+    await storeFallbackResponse({
+      requestType: "food",
+      contextKey: LUNCH_BREAK_UNKNOWN_CONTEXT_KEY,
+      reply,
+      template: "",
+      createdAt: Date.now(),
+    });
+  }
+
+  const stored = await loadFallbackResponsesByContext(LUNCH_BREAK_UNKNOWN_CONTEXT_KEY);
+  if (stored.length) {
+    return stored;
+  }
+
+  return LUNCH_BREAK_UNKNOWN_FALLBACKS.map((reply, index) =>
+    normalizeFallbackResponse({
+      id: `lunch-break-unknown-fallback-${index}`,
+      requestType: "food",
+      contextKey: LUNCH_BREAK_UNKNOWN_CONTEXT_KEY,
+      reply,
+      template: "",
+      createdAt: Date.now() + index,
+    })
+  );
+}
+
+async function getLunchBreakUnknownResponse() {
+  const stored = await loadFallbackResponsesByContext(LUNCH_BREAK_UNKNOWN_CONTEXT_KEY);
+  const pool = stored.length ? stored : LUNCH_BREAK_UNKNOWN_FALLBACKS.map((reply) => ({ reply }));
+  const choice = pool[Math.floor(Math.random() * pool.length)];
+  return String(choice.reply || "").trim() || LUNCH_BREAK_UNKNOWN_FALLBACKS[0];
 }
 
 async function createSnottyRemark(food) {
@@ -1241,6 +1593,22 @@ const server = http.createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && pathname === "/api/daily-check-in") {
+      const deviceId = String(url.searchParams.get("deviceId") || "").trim();
+      const [checkIn, todayCheckIns] = await Promise.all([
+        findTodayDailyCheckInByDevice(deviceId),
+        listTodayDailyCheckIns(),
+      ]);
+      sendJson(response, 200, { checkIn, todayCheckIns });
+      return;
+    }
+
+    if (request.method === "GET" && pathname === "/api/lunch-break-unknown-response") {
+      const reply = await getLunchBreakUnknownResponse();
+      sendJson(response, 200, { reply });
+      return;
+    }
+
     if (request.method === "GET" && pathname === "/api/analytics/requests") {
       const summary = await listRequests();
       sendJson(response, 200, summary);
@@ -1267,6 +1635,26 @@ const server = http.createServer(async (request, response) => {
       }
 
       sendJson(response, 201, { request: requestRecord });
+      return;
+    }
+
+    if (request.method === "POST" && pathname === "/api/daily-check-in") {
+      const body = await readRequestBody(request);
+      const parsed = JSON.parse(body || "{}");
+      const checkIn = await saveTodayDailyCheckIn({
+        deviceId: parsed.deviceId,
+        role: parsed.role,
+        name: parsed.name,
+        lunchBreakTime: parsed.lunchBreakTime,
+      });
+
+      if (!checkIn) {
+        sendJson(response, 400, { error: "Required daily check-in fields are missing." });
+        return;
+      }
+
+      const todayCheckIns = await listTodayDailyCheckIns();
+      sendJson(response, 201, { checkIn, todayCheckIns });
       return;
     }
 
@@ -1348,9 +1736,16 @@ const server = http.createServer(async (request, response) => {
   }
 });
 
+async function seedLunchBreakUnknownPoolCommand() {
+  await initializeDatabase();
+  const stored = await ensureLunchBreakUnknownPool();
+  console.log(`Stored lunch-break unknown responses: ${stored.length}`);
+}
+
 async function startServer() {
   try {
     await initializeDatabase();
+    await ensureLunchBreakUnknownPool();
     server.listen(PORT, HOST, () => {
       console.log(
         `OpenAI configured: ${OPENAI_API_KEY ? "yes" : "no"}; model: ${OPENAI_MODEL}; persistence: ${
@@ -1365,4 +1760,13 @@ async function startServer() {
   }
 }
 
-startServer();
+if (process.argv.includes("--seed-lunch-break-unknown-pool")) {
+  seedLunchBreakUnknownPoolCommand()
+    .then(() => process.exit(0))
+    .catch((error) => {
+      console.error("Failed to seed lunch-break unknown pool:", error);
+      process.exit(1);
+    });
+} else {
+  startServer();
+}

@@ -29,8 +29,10 @@ const ridePurposeOptions = document.getElementById("ride-purpose-options");
 const rideFromOptions = document.getElementById("ride-from-options");
 const rideToOptions = document.getElementById("ride-to-options");
 const mealTypeInputs = document.querySelectorAll('input[name="mealType"]');
-const requestList = document.getElementById("request-list");
-const emptyRequests = document.getElementById("empty-requests");
+const lunchRequestList = document.getElementById("lunch-request-list");
+const emptyLunchRequests = document.getElementById("empty-lunch-requests");
+const rideRequestList = document.getElementById("ride-request-list");
+const emptyRideRequests = document.getElementById("empty-ride-requests");
 const requestStatus = document.getElementById("request-status");
 const clearRequestsButton = document.getElementById("clear-requests");
 const analysisLink = document.getElementById("analysis-link");
@@ -52,7 +54,11 @@ const profileStatus = document.getElementById("profile-status");
 const profileSubmitButton = document.getElementById("profile-submit");
 const profileNameGrid = document.getElementById("profile-name-grid");
 const profileRoleInputs = document.querySelectorAll('input[name="profileRole"]');
+const lunchBreakSection = document.getElementById("lunch-break-section");
+const profileLunchBreakInput = document.getElementById("profile-lunch-break-input");
+const lunchBreakUnknownButton = document.getElementById("lunch-break-unknown-button");
 const headerNamePicker = document.getElementById("header-name-picker");
+const dailyCheckinsList = document.getElementById("daily-checkins-list");
 const clientFallbackReplies = [
   "That order just made the frying pan raise an eyebrow.",
   "Interesting choice. The kitchen staff is now in dramatic negotiations.",
@@ -79,6 +85,7 @@ const AMERICAN_VOICE_NAMES = [
   "Nicky",
 ];
 const SESSION_KEY = "feedme-profile";
+const DEVICE_KEY = "feedme-device-id";
 const PROFILES = {
   kids: ["Ofer", "Amit", "Nitzan"],
   parent: ["Roni", "Adi"],
@@ -90,12 +97,14 @@ const PARENT_EMAILS = {
 const RIDE_SUGGESTION_LIMIT = 12;
 
 let state = loadState();
+state.dailyCheckIns = [];
 let availableVoices = [];
 let activeProfile = loadProfile();
 let replyRevealTimeoutId = null;
 let speechPrimed = false;
 let editingRequestId = null;
 let nextReplyAccent = "british";
+let activeDeviceId = getOrCreateDeviceId();
 
 function setSelectedMealType(mealType) {
   const normalizedMealType = mealType === "dinner" ? "dinner" : "lunch";
@@ -255,6 +264,22 @@ function saveState() {
   );
 }
 
+function getOrCreateDeviceId() {
+  let deviceId = localStorage.getItem(DEVICE_KEY);
+  if (deviceId) {
+    return deviceId;
+  }
+
+  if (window.crypto && typeof window.crypto.randomUUID === "function") {
+    deviceId = window.crypto.randomUUID();
+  } else {
+    deviceId = `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  localStorage.setItem(DEVICE_KEY, deviceId);
+  return deviceId;
+}
+
 function normalizeSuggestionValue(value, maxLength = 80) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
 }
@@ -355,9 +380,7 @@ function updateMealDisplays() {
     dinner ? dinnerNote || "No extra note for dinner today." : "Add the dinner plan in the parent view.";
 
   plannerForm.lunch.value = state.menu.lunch;
-  plannerForm.lunchNote.value = state.menu.lunchNote;
   plannerForm.dinner.value = state.menu.dinner;
-  plannerForm.dinnerNote.value = state.menu.dinnerNote;
 }
 
 function formatTime(timestamp) {
@@ -599,20 +622,29 @@ function renderKidRequests() {
 }
 
 function renderRequests() {
-  requestList.innerHTML = "";
   renderKidRequests();
-
-  if (!state.requests.length) {
-    emptyRequests.classList.remove("is-hidden");
-    return;
+  if (lunchRequestList) {
+    lunchRequestList.innerHTML = "";
+  }
+  if (rideRequestList) {
+    rideRequestList.innerHTML = "";
   }
 
-  emptyRequests.classList.add("is-hidden");
-
-  state.requests
+  const sortedRequests = state.requests
     .slice()
-    .sort((left, right) => right.createdAt - left.createdAt)
-    .forEach((request) => {
+    .sort((left, right) => right.createdAt - left.createdAt);
+  const lunchRequests = sortedRequests.filter((request) => request.requestType !== "ride");
+  const rideRequests = sortedRequests.filter((request) => request.requestType === "ride");
+
+  if (emptyLunchRequests) {
+    emptyLunchRequests.classList.toggle("is-hidden", Boolean(lunchRequests.length));
+  }
+
+  if (emptyRideRequests) {
+    emptyRideRequests.classList.toggle("is-hidden", Boolean(rideRequests.length));
+  }
+
+  sortedRequests.forEach((request) => {
       const item = document.createElement("li");
       item.className = "request-item";
 
@@ -683,9 +715,61 @@ function renderRequests() {
       content.append(time);
       renderRequestReply(content, request);
       item.append(content, actions);
-      requestList.append(item);
+      if (request.requestType === "ride") {
+        rideRequestList?.append(item);
+      } else {
+        lunchRequestList?.append(item);
+      }
     });
 
+}
+
+function formatClockTime(value) {
+  if (!value) {
+    return "";
+  }
+
+  const [hours, minutes] = String(value).split(":");
+  if (hours == null || minutes == null) {
+    return value;
+  }
+
+  const parsed = new Date();
+  parsed.setHours(Number(hours) || 0, Number(minutes) || 0, 0, 0);
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(parsed);
+}
+
+function renderDailyCheckIns() {
+  if (!dailyCheckinsList) {
+    return;
+  }
+
+  dailyCheckinsList.innerHTML = "";
+  const entries = (Array.isArray(state.dailyCheckIns) ? state.dailyCheckIns : [])
+    .filter((entry) => entry.role === "kids")
+    .sort((left, right) => right.createdAt - left.createdAt);
+  const entriesByKid = new Map(entries.map((entry) => [entry.name, entry]));
+
+  PROFILES.kids.forEach((kidName) => {
+    const entry = entriesByKid.get(kidName);
+    const row = document.createElement("tr");
+
+    const nameCell = document.createElement("th");
+    nameCell.scope = "row";
+    nameCell.textContent = kidName;
+
+    const checkInCell = document.createElement("td");
+    checkInCell.textContent = entry ? formatTime(entry.createdAt) : "Not yet";
+
+    const lunchCell = document.createElement("td");
+    lunchCell.textContent = entry?.lunchBreakTime ? formatClockTime(entry.lunchBreakTime) : "-";
+
+    row.append(nameCell, checkInCell, lunchCell);
+    dailyCheckinsList.append(row);
+  });
 }
 
 async function fetchJson(url, options = {}) {
@@ -698,6 +782,13 @@ async function fetchJson(url, options = {}) {
   return response.json();
 }
 
+async function refreshDailyCheckInState() {
+  const payload = await fetchJson(`/api/daily-check-in?deviceId=${encodeURIComponent(activeDeviceId)}`);
+  state.dailyCheckIns = Array.isArray(payload.todayCheckIns) ? payload.todayCheckIns : [];
+  renderDailyCheckIns();
+  return payload.checkIn || null;
+}
+
 async function refreshRequests() {
   try {
     const payload = await fetchJson("/api/requests");
@@ -706,6 +797,30 @@ async function refreshRequests() {
   } catch {
     requestStatus.textContent = "Could not load saved requests from the server.";
   }
+}
+
+async function submitDailyCheckIn(profile) {
+  const payload = await fetchJson("/api/daily-check-in", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      deviceId: activeDeviceId,
+      role: profile.role,
+      name: profile.name,
+      lunchBreakTime: profile.lunchBreakTime || "",
+    }),
+  });
+
+  state.dailyCheckIns = Array.isArray(payload.todayCheckIns) ? payload.todayCheckIns : [];
+  renderDailyCheckIns();
+  return payload.checkIn || null;
+}
+
+async function fetchLunchBreakUnknownResponse() {
+  const payload = await fetchJson("/api/lunch-break-unknown-response");
+  return String(payload.reply || "").trim();
 }
 
 async function archiveRequest(requestId) {
@@ -835,6 +950,8 @@ function renderProfileNames(role) {
     return;
   }
 
+  const preferredName = activeProfile && activeProfile.role === role ? activeProfile.name : "";
+
   PROFILES[role].forEach((name, index) => {
     const label = document.createElement("label");
     label.className = "name-option";
@@ -843,7 +960,7 @@ function renderProfileNames(role) {
     input.type = "radio";
     input.name = "profileName";
     input.value = name;
-    if (index === 0) {
+    if (name === preferredName || (!preferredName && index === 0)) {
       input.checked = true;
     }
 
@@ -876,7 +993,7 @@ function renderHeaderNamePicker(role, selectedName) {
         return;
       }
 
-      saveProfile({ role, name });
+      saveProfile({ ...(activeProfile || {}), role, name });
       applyProfile(activeProfile);
     });
 
@@ -898,11 +1015,31 @@ function getSelectedProfileName() {
   return selected ? selected.value : "";
 }
 
+function getSelectedLunchBreakTime() {
+  return profileLunchBreakInput ? profileLunchBreakInput.value.trim() : "";
+}
+
+function syncOnboardingRoleUI(role) {
+  const isKid = role === "kids";
+
+  if (lunchBreakSection) {
+    lunchBreakSection.classList.toggle("is-hidden", !isKid);
+  }
+
+  if (profileLunchBreakInput) {
+    profileLunchBreakInput.required = isKid;
+    if (!isKid) {
+      profileLunchBreakInput.value = "";
+    }
+  }
+}
+
 function applyProfile(profile) {
   if (!profile) {
     onboardingOverlay.classList.remove("is-hidden");
     document.body.classList.add("is-locked");
     headerNamePicker.innerHTML = "";
+    syncOnboardingRoleUI(getSelectedProfileRole());
     setActiveView("kids");
     return;
   }
@@ -1114,7 +1251,7 @@ roleTabs.forEach((tab) => {
     const role = tab.dataset.viewTarget;
     const currentName = activeProfile && activeProfile.role === role ? activeProfile.name : PROFILES[role][0];
 
-    saveProfile({ role, name: currentName });
+    saveProfile({ ...(activeProfile || {}), role, name: currentName });
     applyProfile(activeProfile);
   });
 
@@ -1135,7 +1272,7 @@ roleTabs.forEach((tab) => {
     const nextTab = orderedTabs[nextIndex];
     const role = nextTab.dataset.viewTarget;
     const currentName = activeProfile && activeProfile.role === role ? activeProfile.name : PROFILES[role][0];
-    saveProfile({ role, name: currentName });
+    saveProfile({ ...(activeProfile || {}), role, name: currentName });
     applyProfile(activeProfile);
     nextTab.focus();
   });
@@ -1177,9 +1314,9 @@ plannerForm.addEventListener("submit", (event) => {
 
   state.menu = {
     lunch: plannerForm.lunch.value.trim(),
-    lunchNote: plannerForm.lunchNote.value.trim(),
+    lunchNote: "",
     dinner: plannerForm.dinner.value.trim(),
-    dinnerNote: plannerForm.dinnerNote.value.trim(),
+    dinnerNote: "",
   };
 
   saveState();
@@ -1211,31 +1348,78 @@ if (analysisLink) {
   });
 }
 
+if (lunchBreakUnknownButton) {
+  lunchBreakUnknownButton.addEventListener("click", () => {
+    void (async () => {
+      primeSpeech();
+      profileLunchBreakInput.value = "";
+      profileStatus.textContent = "";
+
+      try {
+        const reply = await fetchLunchBreakUnknownResponse();
+        if (!reply) {
+          profileStatus.textContent = "Go check it out and report back like a proper lunch detective.";
+          return;
+        }
+
+        profileStatus.textContent = reply;
+        await speakReply(reply);
+      } catch {
+        const fallbackReply = "Go check it out and report back like a proper lunch detective.";
+        profileStatus.textContent = fallbackReply;
+        await speakReply(fallbackReply);
+      }
+    })();
+  });
+}
+
 profileRoleInputs.forEach((input) => {
   input.addEventListener("change", () => {
     renderProfileNames(input.value);
+    syncOnboardingRoleUI(input.value);
     profileStatus.textContent = "";
   });
 });
 
 profileSubmitButton.addEventListener("click", () => {
-  primeSpeech();
-  const role = getSelectedProfileRole();
-  const name = getSelectedProfileName();
+  void (async () => {
+    primeSpeech();
+    const role = getSelectedProfileRole();
+    const name = getSelectedProfileName();
+    const lunchBreakTime = getSelectedLunchBreakTime();
 
-  if (!role) {
-    profileStatus.textContent = "Choose whether you are a kid or a parent first.";
-    return;
-  }
+    if (!role) {
+      profileStatus.textContent = "Choose whether you are a kid or a parent first.";
+      return;
+    }
 
-  if (!name) {
-    profileStatus.textContent = "Choose your name first.";
-    return;
-  }
+    if (!name) {
+      profileStatus.textContent = "Choose your name first.";
+      return;
+    }
 
-  saveProfile({ role, name });
-  profileStatus.textContent = "";
-  applyProfile(activeProfile);
+    if (role === "kids" && !lunchBreakTime) {
+      profileStatus.textContent = "Choose today's lunch break time first.";
+      return;
+    }
+
+    profileStatus.textContent = "Saving today's check-in...";
+
+    try {
+      const checkIn = await submitDailyCheckIn({ role, name, lunchBreakTime });
+      const nextProfile = {
+        role,
+        name,
+        lunchBreakTime: checkIn?.lunchBreakTime || lunchBreakTime,
+      };
+
+      saveProfile(nextProfile);
+      profileStatus.textContent = "";
+      applyProfile(activeProfile);
+    } catch {
+      profileStatus.textContent = "Could not save today's check-in right now.";
+    }
+  })();
 });
 
 loadVoices();
@@ -1245,6 +1429,26 @@ if ("speechSynthesis" in window) {
 
 updateMealDisplays();
 renderRideSuggestions();
-void refreshRequests();
-applyProfile(activeProfile);
 setSelectedMealType("lunch");
+
+void (async () => {
+  try {
+    const checkIn = await refreshDailyCheckInState();
+    if (checkIn) {
+      saveProfile({
+        role: checkIn.role,
+        name: checkIn.name,
+        lunchBreakTime: checkIn.lunchBreakTime || "",
+      });
+    } else {
+      clearProfile();
+      syncOnboardingRoleUI("");
+    }
+  } catch {
+    state.dailyCheckIns = [];
+    renderDailyCheckIns();
+  }
+
+  applyProfile(activeProfile);
+  await refreshRequests();
+})();

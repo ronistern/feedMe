@@ -37,6 +37,20 @@
           <div class="name-grid" id="profile-name-grid" role="radiogroup" aria-label="Choose your name"></div>
         </div>
 
+        <div class="onboarding-section is-hidden" id="lunch-break-section">
+          <label class="input-label" for="profile-lunch-break-input">My lunch break today is at...</label>
+          <div class="input-row">
+            <input
+              id="profile-lunch-break-input"
+              name="lunchBreakTime"
+              type="time"
+            />
+            <button class="secondary-button" id="lunch-break-unknown-button" type="button">
+              I don&apos;t know
+            </button>
+          </div>
+        </div>
+
         <button class="primary-button wide-button" id="profile-submit" type="button">
           Enter I want ...
         </button>
@@ -417,15 +431,6 @@
               placeholder="What is for lunch?"
             />
 
-            <label class="input-label" for="lunch-note-input">Lunch note</label>
-            <textarea
-              id="lunch-note-input"
-              name="lunchNote"
-              rows="2"
-              maxlength="120"
-              placeholder="Optional note, for example time or side dish"
-            ></textarea>
-
             <label class="input-label" for="dinner-input">Dinner</label>
             <input
               id="dinner-input"
@@ -435,19 +440,11 @@
               placeholder="What is for dinner?"
             />
 
-            <label class="input-label" for="dinner-note-input">Dinner note</label>
-            <textarea
-              id="dinner-note-input"
-              name="dinnerNote"
-              rows="2"
-              maxlength="120"
-              placeholder="Optional note, for example time or dessert"
-            ></textarea>
-
             <button class="primary-button wide-button" type="submit">
               Save today&apos;s menu
             </button>
           </form>
+
         </article>
 
         <article
@@ -458,22 +455,62 @@
           aria-labelledby="parent-tab"
         >
           <div class="card-header">
-            <p class="card-kicker">Chef responses</p>
-            <h2>Kids&apos; requests</h2>
+            <p class="card-kicker">Parent activity</p>
+            <h2>Today&apos;s activity</h2>
           </div>
 
-          <section class="requests-board" aria-labelledby="parent-requests-title">
+          <div class="parent-activity-stack">
+            <details class="request-accordion" aria-labelledby="daily-checkins-title">
+              <summary id="daily-checkins-title">Today&apos;s check-ins</summary>
+              <div class="request-panel">
+                <section class="requests-board">
+                  <div class="compact-table-wrap">
+                    <table class="compact-table">
+                      <thead>
+                        <tr>
+                          <th scope="col">Kid</th>
+                          <th scope="col">Check-in</th>
+                          <th scope="col">Lunch</th>
+                        </tr>
+                      </thead>
+                      <tbody id="daily-checkins-list"></tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+            </details>
+
             <div class="requests-header">
-              <span id="parent-requests-title" class="sr-only">Kids&apos; requests</span>
+              <h3 id="parent-requests-title">Kids&apos; requests</h3>
               <button class="secondary-button" id="clear-requests" type="button">
                 Clear all
               </button>
             </div>
-            <ul class="request-list" id="request-list"></ul>
-            <p class="empty-state" id="empty-requests">
-              No requests yet. Kids can send one from their view.
-            </p>
-          </section>
+
+            <details class="request-accordion" aria-labelledby="lunch-requests-title">
+              <summary id="lunch-requests-title">Lunch requests</summary>
+              <div class="request-panel">
+                <section class="requests-board">
+                  <ul class="request-list" id="lunch-request-list"></ul>
+                  <p class="empty-state" id="empty-lunch-requests">
+                    No lunch requests yet.
+                  </p>
+                </section>
+              </div>
+            </details>
+
+            <details class="request-accordion" aria-labelledby="ride-requests-title">
+              <summary id="ride-requests-title">Ride requests</summary>
+              <div class="request-panel">
+                <section class="requests-board">
+                  <ul class="request-list" id="ride-request-list"></ul>
+                  <p class="empty-state" id="empty-ride-requests">
+                    No ride requests yet.
+                  </p>
+                </section>
+              </div>
+            </details>
+          </div>
         </article>
 
       </section>
